@@ -1,0 +1,55 @@
+# 100% global equities forever — high expected return, high variance.
+# Useful as a "max-aggression" baseline to compare against the glide-path version.
+
+defaults:
+  age: 35
+  end_age: 90
+  currency: EUR
+  portfolio: 120000
+  emergency_fund: 12000
+  cash_nominal_return: 0.0225
+
+  return_mode: bootstrap
+  inflation_mode: constant
+  inflation_rate: 0.02
+
+  allocation:
+    assets:
+      stocks: msci_world_total
+    weights:
+      stocks: 1.0
+
+  tax:
+    brackets:
+      - [6000,   0.19]
+      - [50000,  0.21]
+      - [200000, 0.23]
+      - [300000, 0.27]
+      - [.inf,   0.28]
+    index_to_inflation: true
+
+  withdrawal:
+    bucket_threshold: 0.0
+    ef_target_months: 12
+    ef_share_in_bad_year: 1.0
+
+  pension:
+    monthly_amount: 0
+    start_age: 67
+    inflate: true
+
+  n_runs: 5000
+  seed: 42
+
+  incomes:
+    - { name: salary, amount: 42000, start_age: 35, end_age: 49, inflate: true, growth: 0.005 }
+
+  expenses:
+    - { name: living_costs, amount: 18000, start_age: 35, end_age: 90, inflate: true }
+    - { name: mortgage,     amount: 12000, start_age: 35, end_age: 54, inflate: false }
+
+scenarios:
+  - name: all_stocks
+    description: |
+      100% MSCI World forever. Highest expected terminal wealth, but the worst
+      10% of paths take a real beating early on (sequence-of-returns risk).

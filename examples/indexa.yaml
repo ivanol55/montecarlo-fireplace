@@ -1,0 +1,130 @@
+# Indexa Capital + cuenta remunerada — the typical Spanish FIRE setup.
+#
+# Indexa Capital allocates clients to one of 10 risk profiles ("perfil de
+# riesgo"). The portfolio is built from Vanguard fondos (so Spain's traspaso
+# rule applies — internal rebalancing realises no gain). This file models
+# four representative profiles:
+#
+#   profile 3   ~25/75 stocks/bonds   — conservative ("perfil 3")
+#   profile 5   ~50/50                — middle of the road
+#   profile 7   ~70/30                — moderately aggressive (most common)
+#   profile 9   ~85/15                — aggressive ("perfil 9")
+#
+# Approximate equivalences:
+#   Indexa "Vanguard Global Stock Index" → msci_world_total
+#   Indexa "Vanguard Global Bond Index Hedged" + "Eurozone Government Bond
+#       Index" + "Eurozone Inflation Linked Bond Index" → global_agg_bond_total
+#       (single-series proxy; Indexa's actual mix has more inflation-linked
+#       protection than this models)
+#
+# The bond bootstrap pool is 1990–2023 (where Bloomberg Global Aggregate has
+# data), so any bond-containing scenario draws 5-year blocks from that window.
+# Run `python3 scripts/fetch_returns.py` to refresh from authoritative sources.
+
+defaults:
+  age: 35
+  end_age: 90
+  currency: EUR
+  portfolio: 150000
+  emergency_fund: 12000
+  cash_nominal_return: 0.0225
+
+  return_mode: bootstrap
+  inflation_mode: constant
+  inflation_rate: 0.02           # ECB long-run target
+
+  tax:
+    brackets:
+      - [6000,   0.19]
+      - [50000,  0.21]
+      - [200000, 0.23]
+      - [300000, 0.27]
+      - [.inf,   0.28]
+    index_to_inflation: true
+
+  withdrawal:
+    bucket_threshold: 0.0
+    ef_target_months: 12
+    ef_share_in_bad_year: 1.0
+
+  pension:
+    monthly_amount: 1100         # rough Seguridad Social estimate
+    start_age: 67
+    inflate: true
+
+  n_runs: 5000
+  seed: 42
+
+  incomes:
+    - { name: salary, amount: 42000, start_age: 35, end_age: 49, inflate: true, growth: 0.005 }
+
+  expenses:
+    - { name: living_costs, amount: 18000, start_age: 35, end_age: 90, inflate: true }
+    - { name: mortgage,     amount: 12000, start_age: 35, end_age: 54, inflate: false }
+
+scenarios:
+  - name: indexa_p3
+    description: |
+      Indexa profile 3: ~25/75 stocks/bonds. Conservative — the safest
+      sequence-of-returns profile but probably can't sustain a 50+ year FIRE
+      plan without a pension and modest expenses.
+    allocation:
+      assets:
+        stocks: msci_world_total
+        bonds:  global_agg_bond_total
+      weights:
+        stocks: 0.25
+        bonds:  0.75
+
+  - name: indexa_p5
+    description: |
+      Indexa profile 5: ~50/50 stocks/bonds, rebalanced annually.
+    allocation:
+      assets:
+        stocks: msci_world_total
+        bonds:  global_agg_bond_total
+      weights:
+        stocks: 0.50
+        bonds:  0.50
+
+  - name: indexa_p7
+    description: |
+      Indexa profile 7: ~70/30 stocks/bonds. The allocation Indexa most often
+      places long-horizon investors into. Reasonable expected return + some
+      downside dampening from bonds.
+    allocation:
+      assets:
+        stocks: msci_world_total
+        bonds:  global_agg_bond_total
+      weights:
+        stocks: 0.70
+        bonds:  0.30
+
+  - name: indexa_p9
+    description: |
+      Indexa profile 9: ~85/15 stocks/bonds. Aggressive — higher expected
+      terminal wealth, higher variance and worse sequence-of-returns risk.
+    allocation:
+      assets:
+        stocks: msci_world_total
+        bonds:  global_agg_bond_total
+      weights:
+        stocks: 0.85
+        bonds:  0.15
+
+  - name: lifecycle_glide
+    description: |
+      DIY glide-path overlay on top of Indexa: 85/15 in your 30s sliding to
+      50/50 by 80. Indexa itself doesn't auto-glide — implement this by
+      changing your perfil de riesgo every few years (each change triggers
+      a traspaso, which doesn't realise gains as long as you stay within
+      Indexa's fund universe).
+    allocation:
+      assets:
+        stocks: msci_world_total
+        bonds:  global_agg_bond_total
+      glide_path:
+        - { age: 35, stocks: 0.85, bonds: 0.15 }
+        - { age: 50, stocks: 0.70, bonds: 0.30 }
+        - { age: 65, stocks: 0.60, bonds: 0.40 }
+        - { age: 80, stocks: 0.50, bonds: 0.50 }

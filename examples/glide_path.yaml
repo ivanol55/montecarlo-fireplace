@@ -1,0 +1,84 @@
+# Standard age-based glide path: stock-heavy in your 30s, gradually shifting
+# toward bonds as you age. Compares static 60/40 vs glide path vs all-stocks
+# on the same plan, to make the "is the glide worth it?" question concrete.
+#
+# How weights are read: between two pivots, weights are linearly interpolated
+# at each age (e.g. age 50 with pivots at 35 and 65 → halfway between them).
+# Below the first pivot or above the last, weights are clamped.
+#
+# Returns use MSCI World (1970+, USD) for stocks and Bloomberg Global Aggregate
+# Bond (1990+) for bonds. Inflation defaults to a constant 2% (ECB target). The
+# bond series is the short constraint: any scenario using bonds bootstraps from
+# 1990–2023 only (~7 independent 5-year blocks under block bootstrap).
+
+defaults:
+  age: 35
+  end_age: 90
+  currency: EUR
+  portfolio: 120000
+  emergency_fund: 12000
+  cash_nominal_return: 0.0225
+
+  return_mode: bootstrap
+  inflation_mode: constant
+  inflation_rate: 0.02
+
+  tax:
+    brackets:
+      - [6000,   0.19]
+      - [50000,  0.21]
+      - [200000, 0.23]
+      - [300000, 0.27]
+      - [.inf,   0.28]
+    index_to_inflation: true
+
+  withdrawal:
+    bucket_threshold: 0.0
+    ef_target_months: 12
+
+  n_runs: 5000
+  seed: 42
+
+  incomes:
+    - { name: salary, amount: 42000, start_age: 35, end_age: 49, inflate: true, growth: 0.005 }
+
+  expenses:
+    - { name: living_costs, amount: 18000, start_age: 35, end_age: 90, inflate: true }
+    - { name: mortgage,     amount: 12000, start_age: 35, end_age: 54, inflate: false }
+
+scenarios:
+  - name: all_stocks
+    description: 100% MSCI World. Aggressive baseline (54y bootstrap pool, 1970–2023).
+    allocation:
+      assets:
+        stocks: msci_world_total
+      weights:
+        stocks: 1.0
+
+  - name: static_60_40
+    description: |
+      60/40 stocks/bonds, rebalanced annually. Classic "balanced" allocation —
+      simple, lower variance, lower expected return.
+    allocation:
+      assets:
+        stocks: msci_world_total
+        bonds:  global_agg_bond_total
+      weights:
+        stocks: 0.60
+        bonds:  0.40
+
+  - name: glide_path
+    description: |
+      Age-based glide path: 90/10 in your 30s → 70/30 by retirement (50)
+      → 60/40 at 65 → 50/50 at 80. Bond share grows to dampen sequence
+      risk in early retirement, but stays meaningful in equities to keep
+      real growth through a long retirement.
+    allocation:
+      assets:
+        stocks: msci_world_total
+        bonds:  global_agg_bond_total
+      glide_path:
+        - { age: 35, stocks: 0.90, bonds: 0.10 }
+        - { age: 50, stocks: 0.70, bonds: 0.30 }
+        - { age: 65, stocks: 0.60, bonds: 0.40 }
+        - { age: 80, stocks: 0.50, bonds: 0.50 }

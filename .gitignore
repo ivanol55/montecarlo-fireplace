@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+out/
+*.html
+!examples/**/*.html
+
+# Personal cases live here but never get committed.
+# The folder itself is kept (via .gitkeep) so users see where to put their files.
+use_cases/*
+!use_cases/.gitkeep

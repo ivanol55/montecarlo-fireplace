@@ -1,0 +1,103 @@
+# Spain-default FIRE plan with four scenarios.
+#
+# `defaults` is a partial Case applied to every scenario.
+# Each entry under `scenarios` overrides defaults; streams (incomes/expenses)
+# are merged by `name` so a scenario can adjust a single line item.
+
+defaults:
+  age: 35
+  end_age: 90
+  currency: EUR
+  # `portfolio` = your fondos de inversión (e.g. an Indexa Capital plan). Internal
+  # rebalancing inside Indexa uses Spain's *traspaso* rule, so it doesn't realise
+  # gains — only withdrawals do. We simulate that as costless rebalancing.
+  portfolio: 120000
+  # `emergency_fund` = your cuenta remunerada (Trade Republic, MyInvestor,
+  # Openbank, Revolut...). Earns interest, taxed yearly at savings brackets,
+  # interest stacks with portfolio gains in the same brackets that year.
+  emergency_fund: 12000
+  cash_nominal_return: 0.0225    # representative cuenta-remunerada gross APY
+
+  # Bootstrap from MSCI World (1970+, USD) for equities. Inflation defaults to
+  # ECB target (~2%) — see README on why historical Spanish CPI isn't used.
+  return_mode: bootstrap
+  return_series: msci_world_total
+  inflation_mode: constant
+  inflation_rate: 0.02
+
+  tax:
+    brackets:
+      - [6000,   0.19]
+      - [50000,  0.21]
+      - [200000, 0.23]
+      - [300000, 0.27]
+      - [.inf,   0.28]
+    index_to_inflation: true
+
+  withdrawal:
+    bucket_threshold: 0.0        # EF kicks in if portfolio nominal return < 0
+    ef_target_months: 12
+    ef_share_in_bad_year: 1.0
+
+  pension:
+    monthly_amount: 0            # set to expected SS benefit if you want to model it
+    start_age: 67
+    inflate: true
+
+  n_runs: 5000
+  seed: 42
+
+  incomes:
+    - name: salary
+      amount: 42000
+      start_age: 35
+      end_age: 49
+      inflate: true
+      growth: 0.005              # 0.5% real raises
+
+  expenses:
+    - name: living_costs
+      amount: 18000
+      start_age: 35
+      end_age: 90
+      inflate: true
+    - name: mortgage
+      amount: 12000
+      start_age: 35
+      end_age: 54
+      inflate: false             # fixed nominal until paid off
+    - name: lifestyle_uplift_post_retirement
+      amount: 4000
+      start_age: 50
+      end_age: 75
+      inflate: true
+
+scenarios:
+  - name: baseline
+    description: |
+      35yo couple in Madrid, 120k invested, 12k EF, 42k gross salary growing
+      0.5% real. Retire at 50. Mortgage paid off at 54.
+
+  - name: lean_fire
+    description: |
+      Same plan, but cut living costs to 14k/year. Tests how much room a
+      simpler lifestyle buys.
+    expenses:
+      - name: living_costs
+        amount: 14000
+
+  - name: late_retirement
+    description: |
+      Work five more years (retire at 55). Often the single biggest lever in
+      the source-site UX hint.
+    incomes:
+      - name: salary
+        end_age: 54
+
+  - name: with_pension
+    description: |
+      Same as baseline but assume a Seguridad Social pension of 1100€/month
+      from age 67. Reduces tail risk substantially.
+    pension:
+      monthly_amount: 1100
+      start_age: 67
