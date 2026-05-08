@@ -7,9 +7,9 @@ and Eurozone consumer-price inflation. All values are decimal fractions
 
 | Column                  | Series                                                    | Coverage  | Source |
 |-------------------------|-----------------------------------------------------------|-----------|--------|
-| `msci_world_total`      | MSCI World Net Total Return (developed markets), **EUR unhedged** | 1999–2024 | MSCI annual factsheets (`M1WO Index`, EUR Net). |
-| `global_agg_bond_total` | Bloomberg Global Aggregate Bond Index, **EUR hedged**     | 1999–2024 | Bloomberg index history (`LEGATREH Index` / EUR-hedged variant). |
-| `eurozone_hicp`         | Eurozone HICP, all-items annual inflation rate            | 1999–2024 | Eurostat (`prc_hicp_aind`, all-items index, annual average). |
+| `msci_world_total`      | MSCI World Net Total Return (developed markets), **EUR unhedged** | 1999–2025 | 1999–2009: MSCI annual factsheets (`M1WO Index`, EUR Net). 2010–2025: IWDA.AS ETF (iShares Core MSCI World UCITS, EUR Acc), via Yahoo Finance. |
+| `global_agg_bond_total` | Bloomberg Global Aggregate Bond Index, **EUR hedged**     | 1999–2025 | 1999–2019: Bloomberg index history (`LEGATREH Index` / EUR-hedged variant). 2020–2025: AGGH.MI ETF (iShares Global Aggregate Bond UCITS EUR Hedged), via Yahoo Finance. |
+| `eurozone_hicp`         | Eurozone HICP, all-items annual inflation rate            | 1999–2025 | Eurostat dataset `prc_hicp_aind` (geo=EA, unit=RCH_A_AVG, coicop=CP00). Authoritative — fetched directly from Eurostat's JSON API. |
 
 ## Why an EUR/Eurozone-HICP regime, and why 1999 onward
 
@@ -34,7 +34,7 @@ FX alone, and pre-1999 monetary regimes don't generalise to today.
 
 ## Sample size — read this before trusting tail percentiles
 
-The bootstrap pool is 26 rows (1999–2024). With `block_size: 5` that's about
+The bootstrap pool is 27 rows (1999–2025). With `block_size: 5` that's about
 5 effective independent blocks per simulated path. Implications:
 
 - Success-rate **rankings** between scenarios are robust — they share the
@@ -48,22 +48,44 @@ The bootstrap pool is 26 rows (1999–2024). With `block_size: 5` that's about
   via `data_file:` — just keep one regime per simulation, don't mix
   pre-1999 and post-1999 rows in the same bootstrap.
 
-## How the bundled values were obtained
+## How the bundled values are sourced and refreshed
 
-The bundled values are best-effort transcriptions from the public sources
-cited in the table above (MSCI factsheets, Bloomberg index history, Eurostat
-HICP releases). They are appropriate for educational and planning use but
-small revisions (±0.1–0.3pp on individual years) are possible vs. the latest
-vendor-published values. To verify or refresh, the `fetch_returns.py` script
-pulls EUR-denominated ETF proxies from Yahoo Finance (IWDA for MSCI World,
-AGGH for EUR-hedged Global Aggregate). Those ETFs only go back to ~2009 and
-~2017 respectively, so the script merges new years over the bundled values
-rather than replacing them:
+Each of the three columns is fetched from its own canonical source by
+`scripts/fetch_returns.py`:
+
+- **Stocks** (`msci_world_total`): year-end IWDA.AS closes from Yahoo
+  Finance, computed as percentage change of December close (auto-adjusted
+  for distributions). ETF inception is late 2009, so the script's
+  authoritative coverage starts at 2010. Pre-2010 values come from MSCI
+  factsheet best-effort transcriptions and are preserved by the default
+  merge mode.
+- **Bonds** (`global_agg_bond_total`): same approach via AGGH.MI on Yahoo.
+  ETF inception is late 2017, so authoritative coverage starts at 2020.
+  Pre-2020 values come from Bloomberg index factsheet transcriptions.
+- **Inflation** (`eurozone_hicp`): pulled directly from Eurostat's JSON API
+  (`prc_hicp_aind`, Euro area, all-items, annual average rate of change).
+  Authoritative for all years 1996+; the script overwrites every overlapping
+  year on each refresh.
 
 ```
 pip install -e ".[fetch]"
-python scripts/fetch_returns.py
+python scripts/fetch_returns.py            # default: merge new data
+python scripts/fetch_returns.py --full     # rebuild only from authoritative
+                                            # sources (drops pre-ETF history)
 ```
 
-For HICP there is no Yahoo proxy; refresh manually from Eurostat
-(`prc_hicp_aind`) if you want the most current annual rate.
+The default `merge` mode is **idempotent** — running it twice in a row on
+unchanged upstream data produces no diff. Safe to wire up as a periodic
+refresh (e.g. once a quarter, or whenever a year closes).
+
+The `--full` mode is destructive: it discards pre-2010 stocks and pre-2020
+bonds because those don't exist in any ETF history. Only use `--full` if
+you've added a longer-history data source separately (e.g. a custom CSV
+with index-reconstructed pre-ETF values you trust more than the bundled
+factsheet transcriptions).
+
+Eurostat's HICP data starts in 1997, so `prc_hicp_aind` returns 1997 and
+1998 rows on each fetch. Those rows have no equity/bond data and the
+sampler at [src/fireplace/returns.py](../src/fireplace/returns.py) drops
+them automatically — they're real Eurostat data, just not usable for the
+simulation pool, and they cost nothing.

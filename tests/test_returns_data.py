@@ -23,11 +23,17 @@ def test_bundled_csv_has_no_us_only_columns():
 
 def test_pool_starts_in_1999():
     """Euro inception + Bloomberg EUR-hedged inception + ECB regime all
-    start in 1999. Earlier years should not exist."""
+    start in 1999, so the bootstrap pool (intersection of all three columns)
+    must start at 1999. Eurostat publishes HICP from 1997, so 1997-1998
+    rows can exist with HICP-only — but they're dropped by the sampler."""
     df = load_returns()
-    assert df["year"].min() == 1999
-    for col in ("msci_world_total", "global_agg_bond_total", "eurozone_hicp"):
-        assert df[col].notna().all(), f"{col} has gaps inside the 1999+ pool"
+    pool = df.dropna(subset=["msci_world_total", "global_agg_bond_total", "eurozone_hicp"])
+    assert pool["year"].min() == 1999
+    # Pre-1999 rows, if present, must NOT have stock/bond data.
+    pre_1999 = df[df["year"] < 1999]
+    if len(pre_1999) > 0:
+        assert pre_1999["msci_world_total"].isna().all()
+        assert pre_1999["global_agg_bond_total"].isna().all()
 
 
 def test_sampler_works_with_inflation_col():
