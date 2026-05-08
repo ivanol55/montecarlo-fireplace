@@ -43,7 +43,7 @@ Terminal wealth distribution and the age at which failed runs ran out:
 Install:
 
 ```bash
-git clone <this repo> && cd montecarlo-fireplace
+git clone https://github.com/ivanol55/montecarlo-fireplace.git && cd montecarlo-fireplace
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[ui,dev]"
 ```
