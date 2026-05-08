@@ -164,15 +164,15 @@ class Case:
     expenses: list[Stream] = field(default_factory=list)
     pension: Pension = field(default_factory=Pension)
 
-    # Inflation: either a constant rate (default — see ECB target) or "bootstrap"
-    # to draw from a CPI series in the data file. The bundled CSV no longer
-    # includes a CPI column because pre-Eurozone Spanish inflation came from a
-    # monetary regime that no longer applies; ECB-targeted ~2% is the sensible
-    # forward-looking expectation. Override `data_file` + `inflation_series` if
-    # you have a CSV with a CPI column you trust.
-    inflation_mode: Literal["constant", "bootstrap"] = "constant"
-    inflation_rate: float = 0.02                 # ECB long-run target
-    inflation_series: str | None = None          # CSV column for bootstrap mode
+    # Inflation: either bootstrap (default — sample CPI from the data file at the
+    # *same row index* as that year's return, preserving the historical pairing
+    # between bad-return and high-inflation years like 2008 or 2022) or a
+    # constant rate. The bundled CSV ships Eurozone HICP from 1999 onward —
+    # that's the single Eurozone monetary regime under ECB management, which
+    # is the relevant forward-looking distribution for a EUR investor.
+    inflation_mode: Literal["constant", "bootstrap"] = "bootstrap"
+    inflation_rate: float = 0.02                 # only used in constant mode
+    inflation_series: str | None = "eurozone_hicp"  # CSV column for bootstrap mode
 
     # Returns: which series and how to draw.
     return_mode: Literal["bootstrap", "block_bootstrap"] = "bootstrap"

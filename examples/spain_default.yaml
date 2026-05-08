@@ -18,12 +18,15 @@ defaults:
   emergency_fund: 12000
   cash_nominal_return: 0.0225    # representative cuenta-remunerada gross APY
 
-  # Bootstrap from MSCI World (1970+, USD) for equities. Inflation defaults to
-  # ECB target (~2%) — see README on why historical Spanish CPI isn't used.
+  # Bootstrap from MSCI World EUR Net TR (1999+) for equities, and from
+  # Eurozone HICP for inflation. Year indices are shared across return and
+  # CPI columns, so a 2008 return draw pairs with that year's 3.3% inflation
+  # and a 2022 return draw pairs with 8.4% — preserving the joint scenario
+  # that breaks retirement plans.
   return_mode: bootstrap
   return_series: msci_world_total
-  inflation_mode: constant
-  inflation_rate: 0.02
+  inflation_mode: bootstrap
+  inflation_series: eurozone_hicp
 
   tax:
     brackets:

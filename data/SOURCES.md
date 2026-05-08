@@ -1,62 +1,69 @@
 # Data sources
 
-`returns_annual.csv` contains two annual nominal total-return series — the
-ones an Indexa-Capital-style EUR-domiciled investor actually holds. All
-values are decimal fractions (e.g. `0.10` = +10%). Where a series didn't
-exist for a given year, the cell is empty and the bootstrap sampler skips
-that row when that column is needed.
+`returns_annual.csv` contains three annual series for an EUR-domiciled
+investor: a global stock total return, a EUR-hedged global bond total return,
+and Eurozone consumer-price inflation. All values are decimal fractions
+(e.g. `0.10` = +10%).
 
-| Column                  | Series                                              | Coverage | Source |
-|-------------------------|-----------------------------------------------------|----------|--------|
-| `msci_world_total`      | MSCI World total return (developed markets), USD    | 1970–2023 | MSCI End-of-Day index data (public annual returns). |
-| `global_agg_bond_total` | Bloomberg Global Aggregate Bond Index total return  | 1990–2023 | Bloomberg published index history. |
+| Column                  | Series                                                    | Coverage  | Source |
+|-------------------------|-----------------------------------------------------------|-----------|--------|
+| `msci_world_total`      | MSCI World Net Total Return (developed markets), **EUR unhedged** | 1999–2024 | MSCI annual factsheets (`M1WO Index`, EUR Net). |
+| `global_agg_bond_total` | Bloomberg Global Aggregate Bond Index, **EUR hedged**     | 1999–2024 | Bloomberg index history (`LEGATREH Index` / EUR-hedged variant). |
+| `eurozone_hicp`         | Eurozone HICP, all-items annual inflation rate            | 1999–2024 | Eurostat (`prc_hicp_aind`, all-items index, annual average). |
 
-## Why only these two
+## Why an EUR/Eurozone-HICP regime, and why 1999 onward
 
-Earlier versions of this CSV bundled US-only series back to 1928 (S&P 500,
-10y Treasury, US CPI) and a Spain CPI series back to 1970. Both were removed
-because they represent **economic regimes that don't apply to a Spanish
-investor today**:
+The simulator targets a Spanish FIRE setup — typically Indexa Capital fondos
+or EUR-domiciled accumulating ETFs (IWDA, AGGH/EUNA), with expenses paid in
+EUR. Three things only line up coherently from 1999:
 
-- **1928–1969 US data** is from the gold standard, Bretton Woods, and pre-EU
-  Spain — different monetary regime, different exchange-rate dynamics, and
-  not what an Indexa Capital portfolio is exposed to.
-- **Pre-1999 Spain CPI** reflects peseta-era monetary policy (autarky shocks,
-  1970s/80s 15–25% inflation). Post-1999 Spain inflation is just Eurozone
-  inflation managed by the ECB targeting 2%. The pre-Eurozone history would
-  pull the Monte Carlo's inflation distribution toward a regime that no
-  longer exists.
+- The **euro existed** as a currency from 1999. Pre-1999 EUR returns are
+  reconstructed by vendors using synthetic ECU rates that don't reflect any
+  real investor's experience.
+- The **Bloomberg Global Aggregate EUR-hedged** index started in 1999. EUR
+  hedging on a global bond portfolio is what Indexa actually does (and what
+  ETFs like AGGH / EUNA replicate).
+- The **ECB monetary regime** began in 1999, targeting ~2% Eurozone HICP.
+  Pre-1999 Spain CPI reflects peseta-era policy (autarky shocks, 1970s/80s
+  15–25% inflation) that no longer applies.
 
-Sample size is the genuine cost. With MSCI World 1970–2023 (54 years) and
-Bloomberg Global Aggregate 1990–2023 (34 years), the bond-containing
-bootstrap pool is the intersection (34 years). With `block_size: 5` that's
-~7 independent blocks, which is thin. If you want longer-history stress
-tests you can add columns to a custom CSV via `data_file:` in your YAML —
-just don't mix regimes within the same simulation.
+Earlier versions of this CSV bundled USD-denominated data back to 1970 (and
+even US-only series back to 1928). Both were dropped: an EUR investor's
+realised return on MSCI World can differ from the USD return by ±10pp/yr from
+FX alone, and pre-1999 monetary regimes don't generalise to today.
 
-## Inflation
+## Sample size — read this before trusting tail percentiles
 
-The simulator defaults to a constant 2% inflation rate (ECB long-run
-target). For a EUR-domiciled investor with EUR expenses, that's the most
-defensible forward-looking assumption. To bootstrap inflation instead,
-provide a CSV with your own CPI column via `data_file:` and set
-`inflation_mode: bootstrap` + `inflation_series: <column>` in your case.
+The bootstrap pool is 26 rows (1999–2024). With `block_size: 5` that's about
+5 effective independent blocks per simulated path. Implications:
+
+- Success-rate **rankings** between scenarios are robust — they share the
+  same bootstrap noise.
+- **Absolute tail percentiles** (p10 terminal wealth, success rate when below
+  ~95%) carry meaningful sampling error. A printed "92% success" should be
+  read as "high-80s to mid-90s with this small a pool".
+- The pool contains 2008 and 2022 but **no Japan-1990-style lost decade and
+  no 1970s stagflation**. The model can't draw a worse event than the worst
+  observed year. If you want pessimistic stress tests, supply your own CSV
+  via `data_file:` — just keep one regime per simulation, don't mix
+  pre-1999 and post-1999 rows in the same bootstrap.
 
 ## How the bundled values were obtained
 
-Best-effort transcriptions from the public sources cited above. The values
-are appropriate for educational and planning use but may differ from the
-latest source revision by small amounts due to historical re-statements or
-index methodology changes.
-
-To refresh recent years from Yahoo Finance ETF proxies (URTH for MSCI World,
-BNDW for Global Aggregate Bond):
+The bundled values are best-effort transcriptions from the public sources
+cited in the table above (MSCI factsheets, Bloomberg index history, Eurostat
+HICP releases). They are appropriate for educational and planning use but
+small revisions (±0.1–0.3pp on individual years) are possible vs. the latest
+vendor-published values. To verify or refresh, the `fetch_returns.py` script
+pulls EUR-denominated ETF proxies from Yahoo Finance (IWDA for MSCI World,
+AGGH for EUR-hedged Global Aggregate). Those ETFs only go back to ~2009 and
+~2017 respectively, so the script merges new years over the bundled values
+rather than replacing them:
 
 ```
 pip install -e ".[fetch]"
-python3 scripts/fetch_returns.py
+python scripts/fetch_returns.py
 ```
 
-By default the script merges recent ETF-era years into the existing CSV,
-preserving older bundled values. Pass `--full` to replace entirely (this
-loses pre-2012 history because URTH only goes back that far).
+For HICP there is no Yahoo proxy; refresh manually from Eurostat
+(`prc_hicp_aind`) if you want the most current annual rate.

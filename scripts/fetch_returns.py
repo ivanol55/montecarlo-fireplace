@@ -1,21 +1,26 @@
 """Refresh data/returns_annual.csv from Yahoo Finance via yfinance.
 
-Pulls two annual total-return series matching Indexa Capital's main holdings:
+Pulls two annual total-return series matching what an EUR-domiciled
+Indexa Capital / IWDA / AGGH investor actually holds:
 
-  - msci_world_total       MSCI World (developed markets), via URTH
-  - global_agg_bond_total  Bloomberg Global Aggregate Bond, via BNDW
+  - msci_world_total       MSCI World Net TR EUR (unhedged), via IWDA.AS
+                           (iShares Core MSCI World UCITS ETF, EUR Acc)
+  - global_agg_bond_total  Bloomberg Global Aggregate EUR-hedged, via AGGH.MI
+                           (iShares Global Aggregate Bond UCITS ETF EUR Hedged)
 
-ETF-derived data is short (URTH starts 2012, BNDW starts 2018), so this
-script only refreshes recent years and leaves older bundled rows intact
-unless `--full` is passed (use carefully — pre-ETF history is lost).
+ETF-derived data is short — IWDA starts late 2009, AGGH starts 2017 — so
+this script merges new years over the bundled values rather than replacing
+them by default. Bundled history goes back to 1999 (the start of the euro
++ Bloomberg EUR-hedged + ECB regime); see data/SOURCES.md.
 
-Inflation is intentionally not fetched — the simulator defaults to a
-constant ECB-target rate; see README "Modelling notes" for rationale.
+Inflation (`eurozone_hicp`) is **not** fetched here because Yahoo doesn't
+publish it. Refresh manually from Eurostat (`prc_hicp_aind`, all-items
+annual rate) if you want the most current year.
 
 Usage:
     pip install -e ".[fetch]"
     python scripts/fetch_returns.py                # merge new years only
-    python scripts/fetch_returns.py --full         # replace whole CSV
+    python scripts/fetch_returns.py --full         # replace whole CSV (loses pre-ETF history)
 """
 from __future__ import annotations
 
@@ -25,6 +30,13 @@ from pathlib import Path
 
 import pandas as pd
 import yfinance as yf
+
+
+# Yahoo Finance tickers for EUR-denominated UCITS ETFs. These are what an
+# Indexa-style Spanish investor actually holds; their EUR returns include
+# the FX effect (for IWDA) or the cost of EUR-hedging (for AGGH).
+EQUITY_TICKER = "IWDA.AS"   # iShares Core MSCI World UCITS ETF (Acc, EUR)
+BOND_TICKER = "AGGH.MI"     # iShares Global Aggregate Bond UCITS ETF EUR Hedged
 
 
 def fetch_annual_total_return(ticker: str, label: str) -> pd.Series:
@@ -61,8 +73,8 @@ def main() -> None:
     args = parser.parse_args()
 
     print("Fetching annual total returns from Yahoo (via yfinance)...")
-    msci = fetch_annual_total_return("URTH", "msci_world_total")
-    bond = fetch_annual_total_return("BNDW", "global_agg_bond_total")
+    msci = fetch_annual_total_return(EQUITY_TICKER, "msci_world_total")
+    bond = fetch_annual_total_return(BOND_TICKER, "global_agg_bond_total")
     fresh = pd.concat([msci, bond], axis=1).sort_index()
     fresh.index.name = "year"
 
@@ -70,6 +82,9 @@ def main() -> None:
 
     if args.full:
         out = fresh
+        print("WARN: --full does not refresh `eurozone_hicp` — that column "
+              "will be missing. Restore it manually from Eurostat or run "
+              "without --full.")
     else:
         existing = pd.read_csv(target).set_index("year")
         merged = existing.copy()
@@ -83,6 +98,8 @@ def main() -> None:
                     merged.loc[overlap, col] = fresh.loc[overlap, col]
         new_years = fresh.index.difference(existing.index)
         if len(new_years) > 0:
+            # New years won't have HICP from Yahoo; leave NaN until the user
+            # backfills from Eurostat. The simulator drops NaN rows anyway.
             merged = pd.concat([merged, fresh.loc[new_years]]).sort_index()
         out = merged
 
@@ -91,6 +108,11 @@ def main() -> None:
     print("Non-null counts per column:")
     for col, n in out.notna().sum().items():
         print(f"  {col:<24} {n}")
+    if "eurozone_hicp" in out.columns:
+        missing_hicp = out.index[out["eurozone_hicp"].isna()]
+        if len(missing_hicp) > 0:
+            print(f"\nNOTE: eurozone_hicp missing for {list(missing_hicp)}.")
+            print("Refresh from Eurostat `prc_hicp_aind` (all-items annual).")
 
 
 if __name__ == "__main__":

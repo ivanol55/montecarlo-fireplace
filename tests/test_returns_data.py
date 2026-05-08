@@ -7,61 +7,55 @@ import pytest
 from fireplace.returns import load_returns, sample_multicol_paths
 
 
-def test_bundled_csv_has_world_weighted_columns():
+def test_bundled_csv_has_eur_columns():
     df = load_returns()
-    for col in ("msci_world_total", "global_agg_bond_total"):
+    for col in ("msci_world_total", "global_agg_bond_total", "eurozone_hicp"):
         assert col in df.columns, f"missing column {col!r}"
 
 
 def test_bundled_csv_has_no_us_only_columns():
-    """US-only columns were intentionally removed: pre-1970 represented a
-    different economic regime that doesn't apply to a EUR-domiciled investor."""
+    """US-only and pre-Eurozone columns were intentionally removed: they
+    represent monetary regimes that don't apply to a EUR-domiciled investor."""
     df = load_returns()
     for col in ("sp500_total", "us10y_total", "us_cpi", "spain_cpi"):
         assert col not in df.columns, f"removed column {col!r} re-appeared"
 
 
-def test_msci_world_starts_in_1970():
-    """MSCI World inception. Earlier years should not exist; 1970+ populated."""
+def test_pool_starts_in_1999():
+    """Euro inception + Bloomberg EUR-hedged inception + ECB regime all
+    start in 1999. Earlier years should not exist."""
     df = load_returns()
-    assert df["year"].min() == 1970
-    assert df["msci_world_total"].notna().all()
+    assert df["year"].min() == 1999
+    for col in ("msci_world_total", "global_agg_bond_total", "eurozone_hicp"):
+        assert df[col].notna().all(), f"{col} has gaps inside the 1999+ pool"
 
 
-def test_global_bond_starts_in_1990():
-    """Bond series only has data from 1990 onward."""
+def test_sampler_works_with_inflation_col():
+    """Sampling all three columns at shared indices should yield no NaNs and
+    preserve historical pairings."""
     df = load_returns()
-    pre = df[df["year"] < 1990]
-    post = df[df["year"] >= 1990]
-    assert pre["global_agg_bond_total"].isna().all()
-    assert post["global_agg_bond_total"].notna().all()
-
-
-def test_sampler_skips_rows_with_nan_in_required_columns():
-    """Sampling msci_world_total + global_agg_bond should never read pre-1990 rows."""
-    df = load_returns()
-    by_col, _ = sample_multicol_paths(
+    by_col, infl = sample_multicol_paths(
         df,
         return_cols=["msci_world_total", "global_agg_bond_total"],
-        inflation_col=None,
+        inflation_col="eurozone_hicp",
         n_runs=200,
         years=20,
         seed=42,
     )
     assert not np.isnan(by_col["msci_world_total"]).any()
     assert not np.isnan(by_col["global_agg_bond_total"]).any()
-
-
-def test_sampler_intersection_when_columns_have_different_history():
-    """msci_world_total starts 1970, global_agg_bond starts 1990 → pool = 1990+."""
-    df = load_returns()
-    cols = ["msci_world_total", "global_agg_bond_total"]
-    by_col, _ = sample_multicol_paths(df, cols, n_runs=200, years=10, seed=42)
-    valid = df.dropna(subset=cols)
-    assert (valid["year"] >= 1990).all()
-    real_pairs = set(zip(valid[cols[0]], valid[cols[1]]))
-    sampled_pairs = set(zip(by_col[cols[0]].ravel(), by_col[cols[1]].ravel()))
-    assert sampled_pairs.issubset(real_pairs)
+    assert infl is not None and not np.isnan(infl).any()
+    # Index sharing: each (run, year) triple must be a real historical row.
+    valid = df.dropna(subset=["msci_world_total", "global_agg_bond_total", "eurozone_hicp"])
+    real_triples = set(zip(
+        valid["msci_world_total"], valid["global_agg_bond_total"], valid["eurozone_hicp"]
+    ))
+    sampled_triples = set(zip(
+        by_col["msci_world_total"].ravel(),
+        by_col["global_agg_bond_total"].ravel(),
+        infl.ravel(),
+    ))
+    assert sampled_triples.issubset(real_triples)
 
 
 def test_sampler_works_without_inflation_col():

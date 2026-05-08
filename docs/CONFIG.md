@@ -70,9 +70,9 @@ All fields are optional unless noted. Defaults are shown in `()`.
 
 | Field              | Type                          | Description                                                                                     |
 |--------------------|-------------------------------|-------------------------------------------------------------------------------------------------|
-| `inflation_mode`   | `"constant"` \| `"bootstrap"` | (`"constant"`) Constant rate or sample CPI from a CSV column.                                   |
+| `inflation_mode`   | `"constant"` \| `"bootstrap"` | (`"bootstrap"`) Sample CPI from a CSV column at the same row index as that year's return, or use a constant rate.|
 | `inflation_rate`   | float                         | (`0.02`) Used when mode is `constant`. ECB long-run target.                                     |
-| `inflation_series` | string\|null                  | (`null`) CSV column name for `bootstrap` mode. Pair with a `data_file` that contains that column.|
+| `inflation_series` | string\|null                  | (`"eurozone_hicp"`) CSV column name for `bootstrap` mode. The bundled CSV ships Eurozone HICP 1999+; pair with a custom `data_file` for other CPI series.|
 
 ### Returns
 

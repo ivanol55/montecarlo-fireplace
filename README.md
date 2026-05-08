@@ -85,8 +85,8 @@ defaults:
   end_age: 90
   portfolio: 120000
   emergency_fund: 12000
-  inflation_mode: constant
-  inflation_rate: 0.02             # ECB long-run target
+  inflation_mode: bootstrap
+  inflation_series: eurozone_hicp  # 1999+ Eurozone HICP, paired with same-year returns
   return_series: msci_world_total  # bootstrap from data/returns_annual.csv
   tax:                             # Spain savings-income brackets
     brackets:
@@ -225,18 +225,20 @@ portfolio-withdrawal euros into higher brackets in the years you do both.
 ## Modelling notes
 
 - **Returns**: bootstrapped from `data/returns_annual.csv` — two columns,
-  MSCI World total return (1970+) and Bloomberg Global Aggregate Bond
-  (1990+). Both are what an Indexa Capital portfolio actually holds. Use
-  `block_bootstrap` with `block_size: 5` to preserve some autocorrelation.
-  See [data/SOURCES.md](data/SOURCES.md) for why pre-1970 US series and
-  pre-1999 Spain CPI were intentionally excluded. Refresh recent years from
-  Yahoo Finance via `python scripts/fetch_returns.py`.
-- **Inflation**: defaults to a **constant 2%** (ECB long-run target). For a
-  EUR-domiciled investor whose expenses are in EUR, that's the most
-  defensible forward-looking assumption — pre-Eurozone Spanish inflation
-  reflects monetary regimes that no longer apply, so we don't bootstrap it.
-  If you have your own CSV with a CPI column you trust, set
-  `inflation_mode: bootstrap` + `inflation_series: <column>` + `data_file:`.
+  MSCI World Net TR EUR (unhedged) and Bloomberg Global Aggregate EUR-hedged,
+  both 1999–2024. Those are the EUR-investor versions of what an Indexa
+  Capital / IWDA / AGGH holder actually realises (FX exposure for stocks,
+  EUR-hedged for bonds). Use `block_bootstrap` with `block_size: 5` to
+  preserve some autocorrelation. See [data/SOURCES.md](data/SOURCES.md) for
+  why the pool starts in 1999 (post-euro, ECB regime, Bloomberg EUR-hedged
+  inception). Refresh recent years from Yahoo Finance via
+  `python scripts/fetch_returns.py` (uses IWDA + AGGH proxies).
+- **Inflation**: defaults to **bootstrap from `eurozone_hicp`** (1999+).
+  Year indices are shared with the return columns, so a 2008 return draw
+  pairs with that year's 3.3% HICP and a 2022 return draw pairs with 8.4% —
+  the joint bad-return / high-inflation scenarios that historically break
+  retirement plans are preserved. To use a flat rate instead, set
+  `inflation_mode: constant` + `inflation_rate: 0.02`.
 - **Tax**: each portfolio withdrawal grosses up against Spain's progressive
   savings-income brackets (19/21/23/27/28%), applied to the realised-gain
   portion of the withdrawal under FIFO cost basis. Cuenta-remunerada interest
@@ -289,12 +291,13 @@ For each `(run, year)` we read **every needed column at the same `i_y`** so
 historical correlations are preserved exactly: 2008's MSCI World draw of −40.7%
 will always be paired with that year's bond and CPI numbers.
 
-When you specify multiple columns whose history starts in different years
-(e.g. `msci_world_total` from 1970, `global_agg_bond_total` from 1990), the
-sampler drops rows where any needed column is missing and bootstraps from the
-intersection. So a 60/40 stocks/bonds configuration draws from 1990–2023
-(where Bloomberg Global Aggregate has data) even though MSCI World goes back
-to 1970.
+When you specify multiple columns whose history starts in different years,
+the sampler drops rows where any needed column is missing and bootstraps
+from the intersection. The bundled CSV's three columns all start in 1999
+(see [data/SOURCES.md](data/SOURCES.md) for why), so the effective pool is
+26 rows. With `block_size: 5` that's about 5 effective independent blocks
+per simulated path — enough for ranking scenarios, but read tail percentiles
+with appropriate skepticism.
 
 ### 2. Multi-asset weighted return ([`simulate.py`](src/fireplace/simulate.py))
 

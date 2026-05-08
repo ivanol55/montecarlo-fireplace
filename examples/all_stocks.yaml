@@ -10,8 +10,8 @@ defaults:
   cash_nominal_return: 0.0225
 
   return_mode: bootstrap
-  inflation_mode: constant
-  inflation_rate: 0.02
+  inflation_mode: bootstrap
+  inflation_series: eurozone_hicp
 
   allocation:
     assets:
