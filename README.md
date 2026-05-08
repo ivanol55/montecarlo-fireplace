@@ -246,10 +246,66 @@ portfolio-withdrawal euros into higher brackets in the years you do both.
   the same year, so a big portfolio withdrawal in an interest-heavy year pays
   marginally more. Brackets index to inflation by default. Withdrawing
   principal from the cuenta remunerada itself is not taxed.
-- **Bucket strategy**: in years where the realised portfolio return is below
-  `bucket_threshold`, the simulator first draws `ef_share_in_bad_year × deficit`
-  from the EF (capped by EF balance) and tops up from the portfolio. In good
-  years it can refill the EF toward `ef_target_months × monthly_expenses`.
+- **Bucket strategy** (FIRE-standard): in years where the realised portfolio
+  return is below `bucket_threshold`, the simulator first draws
+  `ef_share_in_bad_year × deficit` from the EF (capped by EF balance) and tops
+  up from the portfolio. In good years it refills the EF toward
+  `ef_target_months × monthly_expenses`. The shipped defaults across all
+  example YAMLs follow the FIRE community's 2-bucket consensus
+  (Kitces / Pfau / Big ERN) — see [Withdrawal sourcing: FIRE-standard
+  defaults](#withdrawal-sourcing-fire-standard-defaults) below.
+
+### Withdrawal sourcing: FIRE-standard defaults
+
+Every shipped YAML uses the same three withdrawal-policy values. They aren't
+arbitrary — they encode the FIRE community's 2-bucket consensus on where to
+draw retirement spending from:
+
+| Parameter                    | Value | FIRE rationale |
+|------------------------------|-------|----------------|
+| `bucket_threshold`           | `0.0` | Trigger the cash bucket whenever the portfolio prints a nominal loss. Standard "down year" definition — prevents selling depressed equities in years that historically dominate sequence-of-returns failure (2000–02, 2008, 2022). |
+| `ef_target_months`           | `12`  | One year of expenses in cash. Mainstream FIRE consensus: enough to skip the worst-drawdown year without forced selling, small enough that the cash drag doesn't dominate the long-horizon equity premium. |
+| `ef_share_in_bad_year`       | `1.0` | When the bucket triggers, drain the EF first (up to balance), then top up from the portfolio. Maximises the sequence-risk insurance per euro of cash held. |
+
+**The simulator regenerates the EF in retirement.** Originally the refill
+logic only fired in surplus years (accumulation), making the EF a one-shot
+buffer that drained and never returned during retirement. That didn't match
+how Kitces / Pfau actually describe the 2-bucket strategy. The simulator now
+refills the EF whenever a year's nominal portfolio return is ≥ `bucket_threshold`,
+*regardless* of whether that year also had a deficit withdrawal. Tax stacking
+on the same-year realised gains is handled by the existing
+`year_savings_income` ledger.
+
+**Sensitivity to `ef_target_months` under the regenerating policy** —
+success-rate sweep across the personal use case (5000 runs, 1999–2024 EUR
+bootstrap):
+
+| Scenario                     | 3mo  | 6mo  | 12mo | 18mo | 24mo |
+|------------------------------|------|------|------|------|------|
+| retire_45                    | 67.8 | 67.6 | 66.7 | 65.7 | 64.4 |
+| retire_42_with_pension       | 63.9 | 63.5 | 62.5 | 60.9 | 58.9 |
+| realistic_42_with_pension    | 74.7 | 74.4 | 73.4 | 72.2 | 71.1 |
+
+Smaller is monotonically better, but the 3–12 month range is within bootstrap
+noise (~1pp); past 12 months the cash drag becomes meaningful (−2 to −4pp at
+24 months). The FIRE-community consensus of 12 months is defensible as a
+behavioral tradeoff (less stress, more obvious buffer) rather than a
+mathematical optimum — Big ERN's SWR series reaches the same conclusion
+empirically. If you're optimising purely for success rate, drop to 3–6 months;
+if you want behavioral resilience plus a buffer that survives the worst
+single-year drawdown without selling, keep 12.
+
+**Why not zero?** A 0-month buffer forces selling into every nominal-loss
+year. In our bootstrap pool that's ~40% of years. Tax cost is mostly
+irrelevant under FIFO (no gain to realise when V < CB) but the share-count
+erosion at depressed prices is the actual problem — see the Bucket strategy
+math in the Appendix.
+
+**Want to deviate?** Override per-scenario in YAML. Common variants:
+
+- `ef_target_months: 6` — leaner accumulation, accepts more sequence risk
+- `bucket_threshold: -0.10` — keeps EF intact unless the portfolio drops >10%, useful for hoarders
+- `ef_share_in_bad_year: 0.5` — half-and-half draw, avoids draining EF in a single bad year
 - **Real vs nominal**: all internal accounting is nominal; reports are deflated
   to base-year ("real") EUR using each run's realised CPI.
 - **Offline reports**: HTML output inlines plotly.js, so it opens with no
@@ -407,12 +463,18 @@ In each year, after computing the deficit `D = expenses − income − pension`:
   - Take the remainder from the portfolio (with gross-up)
 - Otherwise: take it all from the portfolio.
 
-In good years with no deficit, refill EF toward `ef_target_months ·
-monthly_expenses` if it's below target, pulling from the portfolio (taxable).
+In any year with `return ≥ bucket_threshold`, after the deficit handling,
+refill EF toward `ef_target_months · monthly_expenses` if it's below target,
+pulling from the portfolio (taxable). This fires both during accumulation
+(after a surplus contribution) and during retirement (after a deficit
+withdrawal) — the EF is regenerating insurance, not a one-shot buffer.
 
 The intuition: drawing the EF in bad years avoids selling depressed equities,
 mitigating sequence-of-returns risk. Refilling in good years is mechanical
-"sell high".
+"sell high". Maintaining the buffer perpetually has a real cost (cash drag
+on the EF capital), which is why larger `ef_target_months` values are
+empirically *worse* over long retirement horizons even though they offer
+more single-year insurance — see the FIRE-standard defaults section above.
 
 ### 8. Real vs nominal ([`simulate.py`](src/fireplace/simulate.py))
 

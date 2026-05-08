@@ -28,10 +28,11 @@ defaults:
       - [.inf,   0.28]
     index_to_inflation: true
 
+  # FIRE-standard 2-bucket policy (Kitces / Pfau). README "Bucket strategy".
   withdrawal:
-    bucket_threshold: 0.0
-    ef_target_months: 12
-    ef_share_in_bad_year: 1.0
+    bucket_threshold: 0.0        # EF kicks in if portfolio nominal return < 0
+    ef_target_months: 12         # 1 year of expenses
+    ef_share_in_bad_year: 1.0    # drain cash before selling depressed equities
 
   pension:
     monthly_amount: 0

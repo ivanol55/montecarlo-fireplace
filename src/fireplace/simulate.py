@@ -13,8 +13,15 @@ values for reporting. Order of operations within a year:
            - If this year's portfolio return < threshold and EF > 0:
                take `ef_share_in_bad_year` × deficit from EF (capped),
                rest from portfolio (gross-up for Spain savings-tax).
-           - Otherwise: from portfolio. In good years, refill EF toward target.
-  6. If wealth can't cover the deficit → record failure for this run.
+           - Otherwise: from portfolio.
+  6. If this year's portfolio return ≥ threshold (a "good" year) and EF is
+     below `ef_target_months × monthly_expenses`, top up the EF from the
+     portfolio. Fires both during accumulation (after a surplus contribution)
+     and during retirement (after a deficit withdrawal) — the standard FIRE
+     2-bucket policy treats the cash bucket as regenerating insurance, not
+     a one-shot buffer. Tax stacking is handled by the same realised-gain
+     ledger that the deficit withdrawal already wrote to.
+  7. If wealth can't cover the deficit → record failure for this run.
 
 Reported wealth is real (deflated by cumulative CPI factor)."""
 from __future__ import annotations
@@ -203,9 +210,14 @@ def simulate(case: Case) -> ScenarioReport:
             ef[new_fail] = 0.0
             cost_basis[new_fail] = 0.0
 
-        # Refill EF in good years (no deficit, not failed).
+        # Refill EF in good years (regardless of deficit, not failed).
+        # Firing in deficit years too means the EF regenerates during
+        # retirement instead of being a one-shot buffer — matches Kitces /
+        # Pfau 2-bucket policy. The realised-gain ledger
+        # (`year_savings_income`) handles tax stacking with any deficit
+        # withdrawal that already happened earlier this year.
         good_year = ret >= threshold
-        refill_mask = good_year & (~failed) & (~deficit_mask) & (portfolio > 0)
+        refill_mask = good_year & (~failed) & (portfolio > 0)
         if refill_mask.any():
             monthly_exp = expenses / 12.0
             target = monthly_exp * ef_target_months

@@ -160,6 +160,12 @@ tax:
 
 ### Withdrawal policy
 
+These three values together define a **2-bucket withdrawal strategy** matching
+the FIRE-community consensus on where to draw retirement spending from. The
+defaults below are used by every shipped YAML; see the README section
+[Withdrawal sourcing: FIRE-standard defaults](../README.md#withdrawal-sourcing-fire-standard-defaults)
+for the full rationale and links to source material.
+
 ```yaml
 withdrawal:
   bucket_threshold: 0.0
@@ -169,9 +175,9 @@ withdrawal:
 
 | Field                  | Type  | Description                                                                                                                       |
 |------------------------|-------|-----------------------------------------------------------------------------------------------------------------------------------|
-| `bucket_threshold`     | float | (`0.0`) Pull from EF when the portfolio's realised nominal return is below this. `0.0` = "any nominal-loss year".                 |
-| `ef_target_months`     | float | (`12.0`) Target EF size in months of expenses; in good years the simulator refills the EF up to this from the portfolio (taxable).|
-| `ef_share_in_bad_year` | float | (`1.0`) Fraction of the year's net deficit that comes from EF when the bucket triggers (capped by EF balance).                    |
+| `bucket_threshold`     | float | (`0.0`) Pull from EF when the portfolio's realised nominal return is below this. `0.0` = "any nominal-loss year" (FIRE standard). |
+| `ef_target_months`     | float | (`12.0`) Target EF size in months of expenses. FIRE consensus: 12 months balances sequence-risk insurance against cash drag.       |
+| `ef_share_in_bad_year` | float | (`1.0`) Fraction of the year's net deficit that comes from EF when the bucket triggers (capped by EF balance). `1.0` = drain cash before touching equities. |
 
 ### Allocation
 
