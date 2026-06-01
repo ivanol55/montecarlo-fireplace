@@ -46,22 +46,6 @@ def _sample_indices(
     return (starts[:, :, None] + offsets[None, None, :]).reshape(n_runs, -1)[:, :years]
 
 
-def sample_paths(
-    df: pd.DataFrame,
-    return_col: str,
-    inflation_col: str = "spain_cpi",
-    n_runs: int = 1000,
-    years: int = 60,
-    block_size: int = 1,
-    seed: int | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Single-series sampler kept for back-compat. Returns (returns, inflation)."""
-    by_col, infl = sample_multicol_paths(
-        df, [return_col], inflation_col, n_runs, years, block_size, seed
-    )
-    return by_col[return_col], infl
-
-
 def sample_multicol_paths(
     df: pd.DataFrame,
     return_cols: list[str],

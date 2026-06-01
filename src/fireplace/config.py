@@ -8,13 +8,25 @@ streams or override fields of an existing one (e.g. just bump the amount).
 from __future__ import annotations
 
 import copy
-from dataclasses import fields, is_dataclass
+from dataclasses import fields
 from pathlib import Path
-from typing import Any
 
 import yaml
 
-from .case import Allocation, Asset, Case, GlidePoint, Pension, Stream, TaxConfig, WithdrawalPolicy
+from .case import (
+    Allocation,
+    Asset,
+    Case,
+    CurvePoint,
+    DynamicSpending,
+    GlidePoint,
+    Pension,
+    SpendingCurve,
+    Stream,
+    TaxConfig,
+    WealthTaxConfig,
+    WithdrawalPolicy,
+)
 
 # Top-level keys that should be replaced (not deep-merged) when a scenario overrides defaults.
 _REPLACE_KEYS = {"allocation"}
@@ -69,6 +81,7 @@ def _build_streams(items: list[dict] | None, kind: str) -> list[Stream]:
                 inflate=bool(raw.get("inflate", True)),
                 growth=float(raw.get("growth", 0.0)),
                 kind=kind,  # type: ignore[arg-type]
+                discretionary=bool(raw.get("discretionary", False)),
             )
         )
     return out
@@ -143,8 +156,26 @@ def _build_case(name: str, raw: dict) -> Case:
                 for b in raw["tax"]["brackets"]
             ]
         raw["tax"] = TaxConfig(**raw["tax"])
+    if "wealth_tax" in raw and isinstance(raw["wealth_tax"], dict):
+        if "brackets" in raw["wealth_tax"]:
+            raw["wealth_tax"]["brackets"] = [
+                (float("inf") if b[0] in ("inf", None) else float(b[0]), float(b[1]))
+                for b in raw["wealth_tax"]["brackets"]
+            ]
+        raw["wealth_tax"] = WealthTaxConfig(**raw["wealth_tax"])
     if "withdrawal" in raw and isinstance(raw["withdrawal"], dict):
         raw["withdrawal"] = WithdrawalPolicy(**raw["withdrawal"])
+    if "spending_curve" in raw and isinstance(raw["spending_curve"], dict):
+        sc = raw["spending_curve"]
+        raw["spending_curve"] = SpendingCurve(
+            enabled=bool(sc.get("enabled", False)),
+            pivots=[
+                CurvePoint(age=int(p["age"]), factor=float(p["factor"]))
+                for p in sc.get("pivots", [])
+            ],
+        )
+    if "dynamic_spending" in raw and isinstance(raw["dynamic_spending"], dict):
+        raw["dynamic_spending"] = DynamicSpending(**raw["dynamic_spending"])
     valid = {f.name for f in fields(Case)}
     extra = set(raw) - valid
     if extra:
@@ -174,16 +205,3 @@ def load_config(path: str | Path) -> list[Case]:
                 merged["data_file"] = str((path.parent / df).resolve())
         cases.append(_build_case(name, merged))
     return cases
-
-
-def case_to_dict(case: Case) -> dict[str, Any]:
-    """Inverse of _build_case, useful for the Streamlit form round-trip."""
-    def serialise(v):
-        if is_dataclass(v):
-            return {f.name: serialise(getattr(v, f.name)) for f in fields(v)}
-        if isinstance(v, list):
-            return [serialise(x) for x in v]
-        if isinstance(v, tuple):
-            return list(v)
-        return v
-    return serialise(case)

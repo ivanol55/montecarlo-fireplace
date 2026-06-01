@@ -15,10 +15,23 @@ cost basis and bracket stacking, and reports:
 
 - **Success rate** (fraction of runs that don't run out of money before `end_age`)
 - **Terminal wealth distribution** (p10 / p50 / p90)
+- **Withdrawal-rate metrics** — median year-1 WR (the FIRE 4%-rule analogue) and
+  median peak WR among surviving runs, plus a per-age WR percentile chart
+- **Funded ratio** at retirement (assets ÷ PV of future real spending)
+- **Legacy / drawdown** — chance of ending at or above your starting pot, and
+  median worst peak-to-trough real-wealth drawdown
 - **Sequence-of-returns risk decomposition** — how the early decade looks in
-  failed vs successful runs
+  failed vs successful runs, and how severe failures are (median plan-years short)
 - **Withdrawal-source breakdown** (per-year median: portfolio, EF, income, pension)
-- **Tax drag** — lifetime tax paid and effective rate on withdrawals
+- **Tax drag** — lifetime savings-income tax paid, effective rate on withdrawals,
+  and (optionally) lifetime net-wealth tax
+- **Sustainable spending & die-with-zero solvers** (`--solve` / `--dwz`) — the
+  largest uniform spend multiple that still clears a target success rate, and the
+  one that drives median terminal wealth to zero
+
+Each scenario also gets a deterministic, templated **Result block and verdict**
+derived purely from its numbers (`fireplace summary`), so the editorial read
+never drifts from the model.
 
 Multiple scenarios share a single YAML file via inheritance, so you can compare
 "baseline vs lean-FIRE vs work-five-more-years" in one report.
@@ -55,6 +68,16 @@ fireplace run examples/spain_default.yaml -o out/report.html
 open out/report.html
 ```
 
+Add the spending solvers (each re-simulates, so they're slower):
+
+```bash
+fireplace run examples/spain_default.yaml --solve --dwz -o out/report.html
+```
+
+`--solve` adds the largest uniform spend multiple that still clears 95% success;
+`--dwz` adds the die-with-zero multiple (the spend that drives median terminal
+wealth to zero). Both show up per scenario in the console and the report.
+
 Or an interactive Streamlit app — tweak any input and re-run live:
 
 ```bash
@@ -67,6 +90,13 @@ List the scenarios defined in a config:
 
 ```bash
 fireplace list examples/spain_default.yaml
+```
+
+Print the deterministic Result block + verdict for each scenario — the AI-free
+way to refresh prose summaries (same numbers in, same text out):
+
+```bash
+fireplace summary examples/spain_default.yaml
 ```
 
 ## Configuring your case
@@ -172,6 +202,58 @@ The glide-path config produces a side-by-side comparison of three allocations:
 
 ![Three-allocation scenario comparison from glide_path.yaml](docs/img/comparison.png)
 
+## Spending evolution
+
+Flat-real spending for 50 years is the optimistic part of any plan. Two optional
+mechanisms model how spending actually moves — both acting **only** on expense
+streams you mark `discretionary: true`, never on fixed costs (mortgage, upkeep,
+care). They default off, so a case with neither set behaves exactly as a
+flat-real plan; when both are on, their multipliers compound.
+
+- **`spending_curve`** — a deterministic age "smile" (Bernicke / Blanchett):
+  discretionary spend runs hot in the go-go 40s/50s and tapers through the
+  slow-go / no-go years. It's the same multiplier for every run — just *timing*
+  a fixed lifetime budget toward the healthy decades. Late-life care is a
+  separate non-discretionary stream, so it provides the upward tail.
+
+- **`dynamic_spending`** — Guyton-Klinger guardrails: each retirement year,
+  compare the current withdrawal rate to the rate at retirement. If the pot is
+  stretched (WR risen past `upper_guard`× the initial) cut discretionary spend by
+  `cut`; if flush (WR fallen below `lower_guard`×) raise it by `bump`. The per-run
+  multiplier ratchets and is clamped to `[floor, ceiling]`. This is the lever
+  that lets a plan spend its right-tail surplus instead of dying rich, while
+  still protecting the downside.
+
+```yaml
+expenses:
+  - { name: living_retire, amount: 16800, start_age: 42, end_age: 90, inflate: true, discretionary: true }
+
+spending_curve:
+  enabled: true
+  pivots:
+    - { age: 42, factor: 1.20 }
+    - { age: 70, factor: 0.90 }
+    - { age: 85, factor: 0.80 }
+
+dynamic_spending:
+  enabled: true
+  upper_guard: 1.20    # cut when WR > 1.2× the first-retirement-year WR
+  lower_guard: 0.80    # raise when WR < 0.8× it
+  cut: 0.10
+  bump: 0.10
+  floor: 0.50          # clamp the cumulative discretionary multiplier
+  ceiling: 1.50
+```
+
+Together these are the honest "morir con cero" model — spend the healthy years
+well and let the portfolio throttle discretionary spend up or down each year —
+versus the all-or-nothing of statically front-loading expense streams. Full
+field reference in [docs/CONFIG.md](docs/CONFIG.md#spending-behaviour).
+
+[examples/spending_evolution.yaml](examples/spending_evolution.yaml) compares
+flat-real vs smile-only vs guardrails-only vs both, with an optional wealth-tax
+overlay — a one-command side-by-side of every mechanism in this section.
+
 ## Spain-specific guide
 
 The model is specifically aimed at the typical Spanish FIRE setup. The two
@@ -246,6 +328,15 @@ portfolio-withdrawal euros into higher brackets in the years you do both.
   the same year, so a big portfolio withdrawal in an interest-heavy year pays
   marginally more. Brackets index to inflation by default. Withdrawing
   principal from the cuenta remunerada itself is not taxed.
+- **Wealth tax** (`wealth_tax`, **off by default**): Spain's annual *Impuesto
+  sobre el Patrimonio* plus the solidarity surtax (*ITSGF*). When enabled, it's
+  levied each year on net financial wealth (portfolio + EF) above an `allowance`,
+  on a progressive scale over the excess; the primary residence is excluded
+  (it's a mortgage/upkeep expense stream here, not a portfolio asset). It's kept
+  in its own ledger separate from withdrawal tax, and reported as median lifetime
+  wealth tax — but only when at least one scenario actually levies it, so
+  non-Spanish or fully-bonificated (Madrid) configs stay lean. **Region-dependent:
+  supply your own scale.** See [docs/CONFIG.md](docs/CONFIG.md#wealth-tax).
 - **Bucket strategy** (FIRE-standard): in years where the realised portfolio
   return is below `bucket_threshold`, the simulator first draws
   `ef_share_in_bad_year × deficit` from the EF (capped by EF balance) and tops
@@ -318,8 +409,9 @@ math in the Appendix.
   *not* accurate if you hold ETFs directly in a Spanish broker — there each
   rebalance trade realises gains. If that's your setup, model it manually by
   adding extra realised gains as expenses, or open an issue.
-- No wealth tax (Impuesto sobre el Patrimonio) / IRPF on labour income /
-  regional Spain variants
+- Wealth tax (Impuesto sobre el Patrimonio / ITSGF) is modelled but **off by
+  default** and highly region-dependent — you supply the regional scale (see the
+  wealth-tax note below). No IRPF on labour income; income streams are entered net.
 - Pension is a fixed inflation-indexed monthly amount (no SS replacement-rate model)
 - Real-estate, mortgage interest, and one-off expenses must be modelled as
   custom expense streams
@@ -510,6 +602,80 @@ The report shows the mean of `g_run` separately for runs that *failed*
 failures are dominated by bad early decades — which is exactly the case
 the bucket strategy and glide path are designed to dampen.
 
-## License
+### 10. Discretionary spending: smile × guardrails ([`simulate.py`](src/fireplace/simulate.py), [`case.py`](src/fireplace/case.py))
 
-MIT.
+Each year, expenses are split into fixed and **discretionary** (the streams
+flagged `discretionary: true`). Only the discretionary part is flexed; the final
+discretionary spend in a year is the planned amount times two independent
+multipliers that compound:
+
+```
+disc(age, run) = disc_planned(age) · smile(age) · g(run, age)
+```
+
+- **`smile(age)`** — `SpendingCurve.factor_at`, the same deterministic age curve
+  for every run, linearly interpolated between pivots `(a₁, f₁), (a₂, f₂)` and
+  clamped at the ends: `f(a) = f₁ + (f₂ − f₁)·(a − a₁)/(a₂ − a₁)`.
+- **`g(run, age)`** — the Guyton-Klinger ratchet. On each run's first deficit
+  (retirement) year it fixes a reference WR `wr₀`. In later years, with current
+  WR `wr`: if `wr > upper_guard·wr₀` then `g ← g·(1 − cut)`; if
+  `wr < lower_guard·wr₀` then `g ← g·(1 + bump)`. `g` is clamped to
+  `[floor, ceiling]` and carries forward year to year (it ratchets, it doesn't
+  reset). Disabled mechanisms contribute a flat `1.0`, so a case with neither set
+  is exactly flat-real.
+
+### 11. Net-wealth tax ([`tax.py:wealth_tax_vec`](src/fireplace/tax.py))
+
+When `wealth_tax.enabled`, after each year's withdrawals the assessable base is
+financial wealth above the (inflation-indexed) allowance,
+`base = max(0, portfolio + EF − allowance)`, and the tax is the same
+progressive-slab function used for income, applied to that base against the
+wealth-tax brackets:
+
+```
+wealth_tax = progressive_tax(base, wealth_brackets)
+```
+
+It's paid from the portfolio, recorded in a separate `wealth_tax_paid` ledger
+(it isn't a tax on a withdrawal), deflated to real EUR, and aggregated as median
+lifetime wealth tax.
+
+### 12. Funded ratio ([`report.py:_funded_ratio`](src/fireplace/report.py))
+
+Measured at each run's retirement year `r` (the first deficit year) — funded
+ratio is only meaningful once drawdown begins. It's the median across runs of
+real investable wealth over the present value of future real net spending,
+discounted at a fixed real rate `FUNDED_RATIO_REAL_DISCOUNT = 2%`:
+
+```
+funded(run) = assets_real(r) / Σ_{y≥r} net_need_real(y) / (1 + 0.02)^(y − r)
+```
+
+`net_need_real` already nets out post-retirement income and pension. The 2% real
+discount is a deliberately conservative safe-asset rate (an **assumption**, not a
+model output — the ratio is sensitive to it), so the figure leans pessimistic vs
+discounting at the portfolio's own expected return.
+
+### 13. Withdrawal-rate metrics & spending solvers ([`report.py`](src/fireplace/report.py))
+
+The per run-year `withdrawal_rate` series is `deficit ÷ investable wealth
+pre-withdrawal`, NaN outside deficit years and after insolvency. From it:
+
+- **Year-1 WR** — median across runs of each row's first finite entry (the FIRE
+  4%-rule analogue).
+- **Peak WR** — median over *surviving* runs of each run's worst (max) year.
+  Failed runs trivially approach 100% as wealth hits zero, so they're excluded —
+  this measures how stretched the plans that *worked* got.
+
+The two solvers bisect on a uniform multiple applied to **all** expense streams
+(mortgage included — read them as "multiple of total planned spend"):
+
+- **`sustainable_spending`** (`--solve`) — largest multiple whose success rate is
+  still ≥ a target (default 95%).
+- **`spend_to_zero`** (`--dwz`) — largest multiple that still keeps the chosen
+  terminal-wealth percentile (default the median) at or above a target legacy
+  (default 0). Targeting the median p50 → 0 is the literal "die with zero"; the
+  achieved success rate is reported alongside as the honest price of that spend.
+
+Both re-simulate with the case's own seed, so they're deterministic for a given
+case but carry the same bootstrap noise as any single Monte-Carlo figure.

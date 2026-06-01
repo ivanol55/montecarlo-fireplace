@@ -87,10 +87,23 @@ All fields are optional unless noted. Defaults are shown in `()`.
 
 ### Tax & withdrawal
 
-| Field        | Type             | Description                                                  |
-|--------------|------------------|--------------------------------------------------------------|
-| `tax`        | TaxConfig        | Spain savings-income brackets. See [Tax](#tax).              |
-| `withdrawal` | WithdrawalPolicy | Bucket strategy. See [Withdrawal policy](#withdrawal-policy).|
+| Field        | Type             | Description                                                       |
+|--------------|------------------|------------------------------------------------------------------|
+| `tax`        | TaxConfig        | Spain savings-income brackets. See [Tax](#tax).                   |
+| `wealth_tax` | WealthTaxConfig  | Annual net-wealth tax (Patrimonio / ITSGF). Off by default. See [Wealth tax](#wealth-tax). |
+| `withdrawal` | WithdrawalPolicy | Bucket strategy. See [Withdrawal policy](#withdrawal-policy).     |
+
+### Spending behaviour
+
+How discretionary spending evolves over retirement. Both default **off**, so a
+case with neither set behaves exactly as a flat-real plan. They act only on
+expense streams marked `discretionary: true` — fixed costs (mortgage, upkeep,
+care) are never flexed. When both are on, their multipliers compound.
+
+| Field              | Type            | Description                                                                         |
+|--------------------|-----------------|-------------------------------------------------------------------------------------|
+| `spending_curve`   | SpendingCurve   | Deterministic age-based "spending smile". See [Spending curve](#spending-curve).    |
+| `dynamic_spending` | DynamicSpending | Guyton-Klinger portfolio-reactive guardrails. See [Dynamic spending](#dynamic-spending). |
 
 ### Monte Carlo
 
@@ -124,6 +137,7 @@ incomes:
 | `end_age`   | int    | yes      | Last age at which the stream is active (inclusive).                           |
 | `inflate`   | bool   | no       | (`true`) Index the amount to realised inflation each year.                    |
 | `growth`    | float  | no       | (`0.0`) Extra real growth per year on top of inflation (e.g. salary raises). |
+| `discretionary` | bool | no    | (`false`) **Expenses only.** Marks the stream as flex-able by `spending_curve` and `dynamic_spending`. Fixed costs leave this `false` so they're never cut. Ignored for income streams. |
 
 ### Pension
 
@@ -157,6 +171,99 @@ tax:
 |----------------------|----------------------------|----------------------------------------------------------------------------------------------------------------------------|
 | `brackets`           | list of `[upper, rate]`    | Cumulative bracket schedule. Each pair is `(upper bound EUR, marginal rate)`. **Last entry must use `.inf`** as the upper. |
 | `index_to_inflation` | bool                       | (`true`) Index bracket boundaries to realised inflation each simulated year.                                               |
+
+### Wealth tax
+
+Spain's annual net-wealth tax — *Impuesto sobre el Patrimonio* plus the
+solidarity surtax on large fortunes (*ITSGF*). **Disabled by default.** When
+enabled, it's assessed each simulated year on net *financial* wealth (portfolio
++ emergency fund) above `allowance`, with a progressive scale on the excess.
+The primary residence is excluded — which matches how this model holds the home
+(a mortgage/upkeep expense stream, not a portfolio asset).
+
+This is **highly region-dependent**: Madrid and pre-ITSGF Andalucía bonificate
+Patrimonio to ~zero (model that with `enabled: false`); Catalonia is among the
+harshest. Verify the current regional scale with a gestor before treating these
+euros as exact.
+
+```yaml
+wealth_tax:
+  enabled: true
+  allowance: 700000
+  index_to_inflation: true
+  brackets:
+    - [167129.45,   0.002]
+    - [334252.88,   0.003]
+    - [668499.75,   0.005]
+    - [1336999.51,  0.009]
+    - [2673999.01,  0.013]
+    - [5347998.03,  0.017]
+    - [10695996.06, 0.021]
+    - [.inf,        0.035]
+```
+
+| Field                | Type                    | Description                                                                                                                            |
+|----------------------|-------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| `enabled`            | bool                    | (`false`) Master switch. Off = no wealth tax (fully-bonificated region).                                                              |
+| `allowance`          | float                   | (`700000`) Tax-free *mínimo exento* on financial wealth. Subtracted before the scale; bracket bounds are measured on the **excess**. |
+| `brackets`           | list of `[upper, rate]` | Progressive scale on the excess over `allowance`. `(upper bound of excess EUR, marginal rate)`. **Last entry must use `.inf`.**       |
+| `index_to_inflation` | bool                    | (`true`) Index the allowance and bracket bounds to realised inflation each simulated year, mirroring the income-tax treatment.       |
+
+### Spending curve
+
+A deterministic age-based real multiplier on **discretionary** spending — the
+empirical "retirement spending smile" (Bernicke / Blanchett): higher in the
+go-go years, tapering through the slow-go / no-go years. It applies identically
+to every run, interpolated linearly between pivots and clamped at the endpoints.
+Late-life care is modelled separately as a non-discretionary stream, so this
+curve captures only the discretionary decline.
+
+```yaml
+spending_curve:
+  enabled: true
+  pivots:
+    - { age: 42, factor: 1.20 }
+    - { age: 55, factor: 1.10 }
+    - { age: 70, factor: 0.90 }
+    - { age: 85, factor: 0.80 }
+```
+
+| Field     | Type                       | Description                                                                                          |
+|-----------|----------------------------|------------------------------------------------------------------------------------------------------|
+| `enabled` | bool                       | (`false`) Off = a flat `1.0` multiplier (no smile).                                                  |
+| `pivots`  | list of `{age, factor}`    | Real multiplier on discretionary spend at each age. Interpolated linearly between pivots, clamped outside. |
+
+### Dynamic spending
+
+Guyton-Klinger-style spending guardrails on **discretionary** spending. Each
+retirement year, the current withdrawal rate is compared to the rate set in the
+first retirement year. If it has risen past `upper_guard`× that initial rate,
+discretionary spending is cut by `cut`; if it has fallen below `lower_guard`×,
+it's raised by `bump`. The per-run multiplier ratchets across years and is
+clamped to `[floor, ceiling]`. Raising in good states is what lets a plan spend
+its right-tail surplus instead of dying rich; cutting in bad states protects the
+downside.
+
+```yaml
+dynamic_spending:
+  enabled: true
+  upper_guard: 1.20
+  lower_guard: 0.80
+  cut: 0.10
+  bump: 0.10
+  floor: 0.50
+  ceiling: 1.50
+```
+
+| Field         | Type  | Description                                                                                          |
+|---------------|-------|------------------------------------------------------------------------------------------------------|
+| `enabled`     | bool  | (`false`) Off = discretionary spend stays at its planned level.                                      |
+| `upper_guard` | float | (`1.2`) Cut when current WR exceeds this multiple of the first-retirement-year WR.                   |
+| `lower_guard` | float | (`0.8`) Raise when current WR falls below this multiple of the first-retirement-year WR.             |
+| `cut`         | float | (`0.10`) Fractional reduction applied when the upper guardrail trips.                                |
+| `bump`        | float | (`0.10`) Fractional increase applied when the lower guardrail trips. (Named `bump`, not `raise`, to avoid the Python keyword.) |
+| `floor`       | float | (`0.5`) Lower clamp on the cumulative discretionary multiplier.                                      |
+| `ceiling`     | float | (`1.5`) Upper clamp on the cumulative discretionary multiplier.                                      |
 
 ### Withdrawal policy
 

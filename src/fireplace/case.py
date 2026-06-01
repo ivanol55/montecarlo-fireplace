@@ -98,9 +98,74 @@ class Stream:
     inflate: bool = True
     growth: float = 0.0            # extra real growth on top of inflation (e.g. raises)
     kind: Literal["expense", "income"] = "expense"
+    # Discretionary expenses are the ones the spending curve and the dynamic
+    # guardrails are allowed to flex. Fixed costs (mortgage, upkeep, care) keep
+    # `discretionary=False` so they're never cut. Ignored for income streams.
+    discretionary: bool = False
 
     def active(self, age: int) -> bool:
         return self.start_age <= age <= self.end_age
+
+
+@dataclass
+class CurvePoint:
+    """A pivot in a spending curve: a real multiplier at a given age."""
+
+    age: int
+    factor: float
+
+
+@dataclass
+class SpendingCurve:
+    """Deterministic age-based real multiplier on *discretionary* spending — the
+    empirical 'retirement spending smile' (Bernicke / Blanchett): higher in the
+    go-go years, tapering through the slow-go/no-go years. Late-life care is
+    modelled separately as a non-discretionary stream, so this curve captures
+    only the discretionary decline (the care line provides the upward tail).
+
+    Applies identically to every run, interpolated linearly between pivots and
+    clamped at the endpoints. Independent of the dynamic guardrails — the two
+    multiply together when both are on."""
+
+    enabled: bool = False
+    pivots: list[CurvePoint] = field(default_factory=list)
+
+    def factor_at(self, age: int) -> float:
+        if not self.enabled or not self.pivots:
+            return 1.0
+        pts = sorted(self.pivots, key=lambda p: p.age)
+        if age <= pts[0].age:
+            return pts[0].factor
+        if age >= pts[-1].age:
+            return pts[-1].factor
+        for lo, hi in zip(pts, pts[1:]):
+            if lo.age <= age <= hi.age:
+                t = (age - lo.age) / (hi.age - lo.age)
+                return lo.factor + t * (hi.factor - lo.factor)
+        return pts[-1].factor
+
+
+@dataclass
+class DynamicSpending:
+    """Guyton-Klinger-style spending guardrails on *discretionary* spending.
+
+    Each retirement year, compare the current withdrawal rate to the rate set
+    in the first retirement year. If it has risen past `upper_guard`× that
+    initial rate, cut discretionary spending by `cut`; if it has fallen below
+    `lower_guard`×, raise it by `bump`. The per-run multiplier ratchets across
+    years and is clamped to [`floor`, `ceiling`].
+
+    Raising in good states is what lets a plan spend its right-tail surplus
+    instead of dying rich; cutting in bad states is what protects the downside.
+    `bump` (not `raise`) avoids the Python keyword."""
+
+    enabled: bool = False
+    upper_guard: float = 1.2
+    lower_guard: float = 0.8
+    cut: float = 0.10
+    bump: float = 0.10
+    floor: float = 0.5
+    ceiling: float = 1.5
 
 
 @dataclass
@@ -120,6 +185,45 @@ class TaxConfig:
         ]
     )
     # When True, brackets are indexed to inflation each simulated year.
+    index_to_inflation: bool = True
+
+
+@dataclass
+class WealthTaxConfig:
+    """Annual net-wealth tax — Spain's Impuesto sobre el Patrimonio plus the
+    solidarity surtax on large fortunes (ITSGF).
+
+    Assessed each year on net *financial* wealth (portfolio + emergency fund)
+    above `allowance`, then a progressive scale on the excess. The primary
+    residence is excluded, which lines up with both how this model holds the
+    home (a mortgage expense stream, not a portfolio asset) and the ~300k
+    vivienda-habitual exemption.
+
+    HIGHLY region-dependent. Madrid and (pre-ITSGF) Andalucía bonificate
+    Patrimonio to ~zero; the ITSGF then reclaims it only above ~3M. The default
+    scale below approximates the combined burden for a *non-bonificated*
+    taxpayer (state scale with the solidarity top rates folded in). To model a
+    fully-bonificated region, set `enabled: false`. `brackets` are
+    (upper_bound_of_excess, marginal_rate); the last bound is +inf. Bounds are
+    measured on the base AFTER subtracting `allowance`.
+    """
+
+    enabled: bool = False
+    allowance: float = 700_000.0
+    brackets: list[tuple[float, float]] = field(
+        default_factory=lambda: [
+            (167_129.45, 0.002),
+            (334_252.88, 0.003),
+            (668_499.75, 0.005),
+            (1_336_999.51, 0.009),
+            (2_673_999.01, 0.013),
+            (5_347_998.03, 0.017),
+            (10_695_996.06, 0.021),
+            (float("inf"), 0.035),
+        ]
+    )
+    # Index the allowance and bracket bounds to inflation each simulated year,
+    # mirroring the income-tax treatment.
     index_to_inflation: bool = True
 
 
@@ -183,7 +287,13 @@ class Case:
     cash_nominal_return: float = 0.0             # EF nominal return (HYSA-like; default 0%)
 
     tax: TaxConfig = field(default_factory=TaxConfig)
+    wealth_tax: WealthTaxConfig = field(default_factory=WealthTaxConfig)
     withdrawal: WithdrawalPolicy = field(default_factory=WithdrawalPolicy)
+    # How discretionary spending evolves: a deterministic age curve (the
+    # spending smile) and/or portfolio-reactive guardrails. Both default off, so
+    # a case with neither behaves exactly as a flat-real plan.
+    spending_curve: SpendingCurve = field(default_factory=SpendingCurve)
+    dynamic_spending: DynamicSpending = field(default_factory=DynamicSpending)
 
     # Monte Carlo.
     n_runs: int = 5000
@@ -212,7 +322,15 @@ class ScenarioReport:
     income_received: np.ndarray
     pension_received: np.ndarray
     expenses_paid: np.ndarray
-    tax_paid: np.ndarray
+    tax_paid: np.ndarray                          # savings-income tax (real)
     realised_returns: np.ndarray                  # nominal portfolio returns
     realised_inflation: np.ndarray
     failure_year: np.ndarray                      # int per run; -1 if never failed
+    # Per run-year withdrawal rate (deficit / investable wealth pre-withdrawal);
+    # NaN outside deficit years and after insolvency. Shape (n_runs, years). The
+    # first finite entry of each row is that run's first-retirement-year WR.
+    withdrawal_rate: np.ndarray
+    # Annual net-wealth tax paid per run-year, real EUR. Same shape. All zeros
+    # when `case.wealth_tax.enabled` is False. Kept separate from `tax_paid`
+    # because it isn't a tax on withdrawals.
+    wealth_tax_paid: np.ndarray

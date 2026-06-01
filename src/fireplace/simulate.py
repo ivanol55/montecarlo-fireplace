@@ -30,7 +30,12 @@ import numpy as np
 
 from .case import Case, ScenarioReport, Stream, TaxConfig
 from .returns import load_returns, sample_multicol_paths
-from .tax import gross_up_for_withdrawal
+from .tax import (
+    _indexed_bounds,
+    gross_up_for_withdrawal_vec,
+    progressive_tax_vec,
+    wealth_tax_vec,
+)
 
 
 def _stream_amount(s: Stream, year_offset: int, infl_factor: np.ndarray) -> np.ndarray:
@@ -50,43 +55,24 @@ def _withdraw_from_portfolio(
     """Withdraw `net_needed` from each run in `runs`. Mutates portfolio,
     cost_basis, and prior_savings_income (the realised gain is added).
 
-    Returns (net_delivered, tax_paid) arrays, length len(runs)."""
-    net_delivered = np.zeros(len(runs))
-    tax_paid = np.zeros(len(runs))
-    for k, i in enumerate(runs):
-        need = float(net_needed[k])
-        if need <= 0 or portfolio[i] <= 0:
-            continue
-        tr = gross_up_for_withdrawal(
-            net_needed=need,
-            market_value=float(portfolio[i]),
-            cost_basis=float(cost_basis[i]),
-            cfg=tax_cfg,
-            inflation_factor=float(infl_factor[i]),
-            prior_savings_income=float(prior_savings_income[i]),
-        )
-        gain_fraction = 0.0
-        if portfolio[i] > 0:
-            gain_fraction = max(0.0, (portfolio[i] - cost_basis[i]) / portfolio[i])
-        gross = (tr.realised_gain / gain_fraction) if gain_fraction > 0 else need
-        gross = min(gross, float(portfolio[i]))
-        if gain_fraction > 0:
-            realised_gain = gross * gain_fraction
-            from .tax import _indexed_brackets, progressive_tax
-            brackets = _indexed_brackets(tax_cfg, float(infl_factor[i]))
-            prior = float(prior_savings_income[i])
-            tax_amt = progressive_tax(prior + realised_gain, brackets) - progressive_tax(prior, brackets)
-            cost_portion = gross * (1.0 - gain_fraction)
-            new_cb = max(0.0, float(cost_basis[i]) - cost_portion)
-            prior_savings_income[i] = prior + realised_gain
-        else:
-            tax_amt = 0.0
-            new_cb = max(0.0, float(cost_basis[i]) - gross)
-        portfolio[i] -= gross
-        cost_basis[i] = new_cb
-        net_delivered[k] = gross - tax_amt
-        tax_paid[k] = tax_amt
-    return net_delivered, tax_paid
+    Returns (net_delivered, tax_paid) arrays, length len(runs).
+
+    `gross_up_for_withdrawal_vec` is the single source of truth for the tax, the
+    new cost basis, and the realised gain (which stacks onto this year's
+    savings-income ledger for bracket purposes). Runs are mutually independent
+    within a call, so the whole batch is solved with one vectorised pass."""
+    gross, tax, new_cb, realised = gross_up_for_withdrawal_vec(
+        net_needed=net_needed,
+        market_value=portfolio[runs],
+        cost_basis=cost_basis[runs],
+        cfg=tax_cfg,
+        inflation_factor=infl_factor[runs],
+        prior_savings_income=prior_savings_income[runs],
+    )
+    portfolio[runs] -= gross
+    cost_basis[runs] = new_cb
+    prior_savings_income[runs] += realised
+    return gross - tax, tax
 
 
 def simulate(case: Case) -> ScenarioReport:
@@ -125,6 +111,11 @@ def simulate(case: Case) -> ScenarioReport:
     failed = np.zeros(n, dtype=bool)
     infl_factor = np.ones(n)
 
+    # Dynamic-spending state (inert unless case.dynamic_spending.enabled).
+    disc_factor = np.ones(n)        # per-run discretionary multiplier (ratchets)
+    init_wr = np.full(n, np.nan)    # WR fixed at each run's first retirement year
+    retired = np.zeros(n, dtype=bool)
+
     wealth_real = np.zeros((n, Y))
     portfolio_w = np.zeros((n, Y))
     ef_w = np.zeros((n, Y))
@@ -132,6 +123,13 @@ def simulate(case: Case) -> ScenarioReport:
     pension_r = np.zeros((n, Y))
     expenses_r = np.zeros((n, Y))
     tax_r = np.zeros((n, Y))
+    wealth_tax_r = np.zeros((n, Y))
+
+    # Per run-year withdrawal rate (deficit / investable wealth pre-withdrawal).
+    # NaN in surplus years and once a run is insolvent. The first non-NaN entry
+    # of each row is that run's year-1 (first-retirement) WR; the full series
+    # feeds lifetime-WR bands and the peak-WR metric.
+    wr_series = np.full((n, Y), np.nan)
 
     threshold = case.withdrawal.bucket_threshold
     ef_share = case.withdrawal.ef_share_in_bad_year
@@ -160,12 +158,44 @@ def simulate(case: Case) -> ScenarioReport:
         if case.pension.monthly_amount > 0 and age >= case.pension.start_age:
             annual = case.pension.monthly_amount * 12.0
             pension += annual * (infl_factor if case.pension.inflate else np.ones_like(infl_factor))
-        expenses = np.zeros(n)
+        # Split expenses into fixed and discretionary. The spending curve (a
+        # deterministic age multiplier — the "smile") and the dynamic guardrails
+        # (a per-run, portfolio-reactive multiplier) flex only the discretionary
+        # part; fixed costs (mortgage, upkeep, care) are never touched.
+        fixed_exp = np.zeros(n)
+        disc_exp = np.zeros(n)
         for s in case.expenses:
             if s.active(age):
-                expenses += _stream_amount(s, y, infl_factor)
+                amt = _stream_amount(s, y, infl_factor)
+                if s.discretionary:
+                    disc_exp = disc_exp + amt
+                else:
+                    fixed_exp = fixed_exp + amt
+        disc_exp = disc_exp * case.spending_curve.factor_at(age)
 
+        expenses = fixed_exp + disc_exp * disc_factor
         net = income + pension - expenses
+
+        # Dynamic guardrails: fix each run's reference WR on its first deficit
+        # (retirement) year, then in later years nudge the discretionary
+        # multiplier as the current WR drifts from that reference — cut when the
+        # pot is stretched, raise when it's flush. Inert until enabled, but the
+        # retirement bookkeeping is harmless either way.
+        avail_now = portfolio + ef
+        deficit_now = (net < 0) & (~failed)
+        safe_avail = np.where(avail_now > 0, avail_now, 1.0)
+        wr_now = np.where(deficit_now & (avail_now > 0), -net / safe_avail, np.nan)
+        newly_retired = deficit_now & (~retired)
+        init_wr[newly_retired] = wr_now[newly_retired]
+        retired |= newly_retired
+        ds = case.dynamic_spending
+        if ds.enabled:
+            adj = deficit_now & retired & (~newly_retired) & np.isfinite(init_wr) & (avail_now > 0)
+            disc_factor[adj & (wr_now > ds.upper_guard * init_wr)] *= (1.0 - ds.cut)
+            disc_factor[adj & (wr_now < ds.lower_guard * init_wr)] *= (1.0 + ds.bump)
+            np.clip(disc_factor, ds.floor, ds.ceiling, out=disc_factor)
+            expenses = fixed_exp + disc_exp * disc_factor
+            net = income + pension - expenses
 
         # Surplus → contribute to portfolio.
         contrib_mask = (net > 0) & (~failed)
@@ -176,6 +206,16 @@ def simulate(case: Case) -> ScenarioReport:
         # Deficit → withdraw under bucket policy.
         deficit_mask = (net < 0) & (~failed)
         net_need = np.where(deficit_mask, -net, 0.0)
+
+        # Per-year withdrawal rate: (gross need this year) / (investable wealth
+        # available to fund it — portfolio + EF, post-return and pre-withdrawal).
+        # Numerator and denominator are both in this year's nominal EUR, so the
+        # ratio is inflation-invariant. The first non-NaN entry of each run's row
+        # is its "Year-1 WR" — the FIRE 4%-rule analogue, computed from the
+        # engine's own balances rather than reverse-engineered from the chart.
+        avail = portfolio + ef
+        active = deficit_mask & (avail > 0)
+        wr_series[active, y] = net_need[active] / avail[active]
 
         from_ef = np.zeros(n)
         from_pf = np.zeros(n)
@@ -237,21 +277,41 @@ def simulate(case: Case) -> ScenarioReport:
         # bracket stack this year; tax it at the marginal rate over zero, then
         # subtract from EF. (We taxed the gains stacked on top of `ef_interest`
         # already; if we stacked the order the other way, total would be the
-        # same.) The progressive() function is vectorised below.
-        if (ef_interest > 0).any():
-            from .tax import progressive_tax, _indexed_brackets
-            for i in np.flatnonzero(ef_interest > 0):
-                if failed[i]:
-                    continue
-                brackets_i = _indexed_brackets(case.tax, float(infl_factor[i]))
-                tax_int = progressive_tax(float(ef_interest[i]), brackets_i)
-                # Cap so EF can't go negative; if it would, draw shortfall from portfolio (rare).
-                pay_from_ef = min(tax_int, float(ef[i]))
-                ef[i] -= pay_from_ef
-                remainder = tax_int - pay_from_ef
-                if remainder > 0 and portfolio[i] > 0:
-                    portfolio[i] = max(0.0, portfolio[i] - remainder)
-                tax_paid[i] += tax_int
+        # same.)
+        ef_tax_mask = (ef_interest > 0) & (~failed)
+        if ef_tax_mask.any():
+            idx = np.flatnonzero(ef_tax_mask)
+            bounds, rates = _indexed_bounds(case.tax, infl_factor[idx])
+            tax_int = progressive_tax_vec(ef_interest[idx], bounds, rates)
+            # Cap so EF can't go negative; if it would, draw shortfall from
+            # portfolio (rare), floored at zero.
+            pay_from_ef = np.minimum(tax_int, ef[idx])
+            ef[idx] -= pay_from_ef
+            remainder = tax_int - pay_from_ef
+            draw_pf = np.where((remainder > 0) & (portfolio[idx] > 0), remainder, 0.0)
+            portfolio[idx] = np.maximum(0.0, portfolio[idx] - draw_pf)
+            tax_paid[idx] += tax_int
+
+        # Annual net-wealth tax (Spain Patrimonio / ITSGF), assessed on year-end
+        # net financial wealth above the allowance. Paid from the portfolio,
+        # falling back to the EF if the portfolio is short. It only bites above
+        # the allowance, so low-wealth runs are untouched and it never pushes a
+        # run negative. Kept in its own ledger (`wealth_tax_r`) so it doesn't
+        # distort the savings-income effective-tax-rate metric.
+        wtax = np.zeros(n)
+        if case.wealth_tax.enabled:
+            live = ~failed
+            if live.any():
+                idx = np.flatnonzero(live)
+                wt = wealth_tax_vec(
+                    portfolio[idx] + ef[idx], case.wealth_tax, infl_factor[idx]
+                )
+                pay_pf = np.minimum(wt, portfolio[idx])
+                portfolio[idx] -= pay_pf
+                rem = wt - pay_pf
+                pay_ef = np.minimum(rem, ef[idx])
+                ef[idx] -= pay_ef
+                wtax[idx] = pay_pf + pay_ef
 
         # Record (deflated to real base-year EUR).
         deflate = 1.0 / infl_factor
@@ -264,6 +324,7 @@ def simulate(case: Case) -> ScenarioReport:
         pension_r[:, y] = pension * deflate
         expenses_r[:, y] = expenses * deflate
         tax_r[:, y] = tax_paid * deflate
+        wealth_tax_r[:, y] = wtax * deflate
 
     success_rate = float((failure_year < 0).mean())
     return ScenarioReport(
@@ -279,8 +340,6 @@ def simulate(case: Case) -> ScenarioReport:
         realised_returns=nominal_returns,
         realised_inflation=cpi,
         failure_year=failure_year,
+        withdrawal_rate=wr_series,
+        wealth_tax_paid=wealth_tax_r,
     )
-
-
-def simulate_many(cases: list[Case]) -> list[ScenarioReport]:
-    return [simulate(c) for c in cases]

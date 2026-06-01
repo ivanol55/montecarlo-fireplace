@@ -82,7 +82,7 @@ def fetch_eurostat_hicp() -> pd.Series:
     (e.g. 0.021 for 2.1%). Eurostat publishes the rate as a percentage;
     we divide by 100 to match the CSV convention.
     """
-    print(f"  eurostat: prc_hicp_aind (Euro area, all-items, annual avg)")
+    print("  eurostat: prc_hicp_aind (Euro area, all-items, annual avg)")
     try:
         with urllib.request.urlopen(EUROSTAT_HICP_URL, timeout=30) as response:
             payload = json.loads(response.read())

@@ -2,7 +2,6 @@
 with portfolio gains in the same year's brackets."""
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from fireplace.case import Case, Stream

@@ -1,0 +1,153 @@
+# How spending actually evolves — the spending smile and Guyton-Klinger
+# guardrails — plus an optional net-wealth-tax overlay.
+#
+# All four scenarios share one accumulate-then-retire-at-50 plan. They differ
+# only in how the *discretionary* expense line (`living_retire`, flagged
+# `discretionary: true`) flexes. Fixed costs (mortgage, upkeep) never flex.
+#
+# Run it:
+#   fireplace run examples/spending_evolution.yaml --solve --dwz -o out/se.html
+# Compare success, terminal legacy, and peak WR across the four.
+
+defaults:
+  age: 35
+  end_age: 90
+  currency: EUR
+
+  portfolio: 200000
+  emergency_fund: 18000
+  cash_nominal_return: 0.0225
+
+  return_mode: block_bootstrap
+  block_size: 5
+  return_series: msci_world_total
+  inflation_mode: bootstrap
+  inflation_series: eurozone_hicp
+
+  tax:
+    brackets:
+      - [6000,   0.19]
+      - [50000,  0.21]
+      - [200000, 0.23]
+      - [300000, 0.27]
+      - [.inf,   0.28]
+    index_to_inflation: true
+
+  # Net-wealth tax OFF by default here (fully-bonificated region, e.g. Madrid).
+  # The `wealth_tax_on` scenario below switches it on with the state scale.
+  wealth_tax:
+    enabled: false
+
+  withdrawal:
+    bucket_threshold: 0.0
+    ef_target_months: 12
+    ef_share_in_bad_year: 1.0
+
+  pension:
+    monthly_amount: 1000
+    start_age: 67
+    inflate: true
+
+  n_runs: 5000
+  seed: 42
+
+  incomes:
+    - { name: salary, amount: 45000, start_age: 35, end_age: 49, inflate: true, growth: 0.005 }
+
+  expenses:
+    - { name: living_pre,    amount: 14000, start_age: 35, end_age: 49, inflate: true }
+    # The one discretionary line: the smile and guardrails flex only this.
+    - { name: living_retire, amount: 22000, start_age: 50, end_age: 90, inflate: true, discretionary: true }
+    - { name: mortgage,      amount: 12000, start_age: 35, end_age: 54, inflate: false }
+    # Owned-home running costs once the mortgage ends (IBI, fees, upkeep). Fixed.
+    - { name: housing_upkeep, amount: 2400, start_age: 55, end_age: 90, inflate: true }
+
+scenarios:
+  - name: flat_real
+    description: |
+      Baseline: flat-real discretionary spend for 40 years, no market reaction.
+      The reference the other three are read against.
+
+  - name: smile_only
+    description: |
+      The deterministic spending smile only: discretionary spend runs ~20% hot
+      in the go-go early-50s and tapers to ~80% by the late no-go years. Same
+      lifetime budget, just timed toward the healthy decades.
+    spending_curve:
+      enabled: true
+      pivots:
+        - { age: 50, factor: 1.20 }
+        - { age: 65, factor: 1.05 }
+        - { age: 78, factor: 0.90 }
+        - { age: 90, factor: 0.80 }
+
+  - name: guardrails_only
+    description: |
+      Guyton-Klinger guardrails only: discretionary spend flexes with the
+      portfolio — cut 10% when stretched (WR > 1.2× the first-retirement-year
+      WR), raised 10% when flush (WR < 0.8×), ratcheting within a 0.5x-1.5x band.
+      The lever that spends the right-tail surplus instead of dying rich.
+    dynamic_spending:
+      enabled: true
+      upper_guard: 1.20
+      lower_guard: 0.80
+      cut: 0.10
+      bump: 0.10
+      floor: 0.50
+      ceiling: 1.50
+
+  - name: smile_and_guardrails
+    description: |
+      The realistic plan: smile AND guardrails together. Spend the healthy years
+      well, and let the portfolio throttle discretionary spend up or down each
+      year. The honest "morir con cero" model.
+    spending_curve:
+      enabled: true
+      pivots:
+        - { age: 50, factor: 1.20 }
+        - { age: 65, factor: 1.05 }
+        - { age: 78, factor: 0.90 }
+        - { age: 90, factor: 0.80 }
+    dynamic_spending:
+      enabled: true
+      upper_guard: 1.20
+      lower_guard: 0.80
+      cut: 0.10
+      bump: 0.10
+      floor: 0.50
+      ceiling: 1.50
+
+  - name: wealth_tax_on
+    description: |
+      smile_and_guardrails, but with the net-wealth tax switched on at the
+      Spanish state scale (700k allowance, Patrimonio + ITSGF). Switch this off
+      (the default) for a fully-bonificated region like Madrid. Compare terminal
+      legacy and lifetime tax against smile_and_guardrails to see the drag.
+    spending_curve:
+      enabled: true
+      pivots:
+        - { age: 50, factor: 1.20 }
+        - { age: 65, factor: 1.05 }
+        - { age: 78, factor: 0.90 }
+        - { age: 90, factor: 0.80 }
+    dynamic_spending:
+      enabled: true
+      upper_guard: 1.20
+      lower_guard: 0.80
+      cut: 0.10
+      bump: 0.10
+      floor: 0.50
+      ceiling: 1.50
+    wealth_tax:
+      enabled: true
+      allowance: 700000
+      index_to_inflation: true
+      brackets:
+        - [167129.45,   0.002]
+        - [334252.88,   0.003]
+        - [668499.75,   0.005]
+        - [1336999.51,  0.009]
+        - [2673999.01,  0.013]
+        - [5347998.03,  0.017]
+        - [10695996.06, 0.021]
+        - [.inf,        0.035]
