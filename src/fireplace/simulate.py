@@ -101,6 +101,17 @@ def simulate(case: Case) -> ScenarioReport:
     )  # (Y, A)
     nominal_returns = np.einsum("rya,ya->ry", per_asset, weights_per_year)
 
+    # Optional deterministic stress regime (e.g. stagflation): override the
+    # sampled nominal return and CPI for a fixed window on every run. Every year
+    # outside [s, e) keeps its real bootstrapped draw — the historical data is
+    # untouched except inside the window. Inert unless case.stress.enabled.
+    if case.stress.enabled and case.stress.years > 0:
+        s = max(0, case.stress.start_age - case.age)
+        e = min(Y, case.stress.start_age - case.age + case.stress.years)
+        if e > s:
+            nominal_returns[:, s:e] = case.stress.annual_nominal_return
+            cpi[:, s:e] = case.stress.annual_inflation
+
     n = case.n_runs
     cb0 = case.portfolio if case.portfolio_cost_basis is None else case.portfolio_cost_basis
 

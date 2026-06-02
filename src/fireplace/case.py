@@ -251,6 +251,30 @@ class Pension:
 
 
 @dataclass
+class StressRegime:
+    """A deterministic 'what-if' regime overlaid on top of the bootstrap — a bad
+    outcome the historical data cannot generate on its own (e.g. 1970s-style
+    stagflation, absent from a 1997-2025 sample).
+
+    When enabled, the sampled nominal portfolio return and CPI are OVERRIDDEN
+    with fixed stress values for a window of `years` starting at `start_age`.
+    Every year outside the window keeps its real bootstrapped draw, so the
+    historical data is left completely intact except inside the stress window.
+
+    The window is imposed on *every* run, so the resulting success rate is
+    CONDITIONAL — "if this regime hits at this age, would the plan survive?" —
+    not a probability-weighted forecast. It's a worst-timed stress lens, not a
+    prediction. Default disabled: a case with no stress block behaves exactly as
+    before, and the real data is never touched."""
+
+    enabled: bool = False
+    start_age: int = 42                  # when the bad regime begins
+    years: int = 10                      # how long it lasts
+    annual_inflation: float = 0.07       # nominal CPI per year in the window
+    annual_nominal_return: float = 0.0   # nominal portfolio return per year (→ deeply negative real)
+
+
+@dataclass
 class Case:
     name: str
     description: str = ""
@@ -294,6 +318,9 @@ class Case:
     # a case with neither behaves exactly as a flat-real plan.
     spending_curve: SpendingCurve = field(default_factory=SpendingCurve)
     dynamic_spending: DynamicSpending = field(default_factory=DynamicSpending)
+    # Optional deterministic stress regime (off by default). Never alters the
+    # bootstrap outside its own age window.
+    stress: StressRegime = field(default_factory=StressRegime)
 
     # Monte Carlo.
     n_runs: int = 5000

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from fireplace.case import Case, CurvePoint, DynamicSpending, Pension, SpendingCurve, Stream
+from fireplace.case import (
+    Case, CurvePoint, DynamicSpending, Pension, SpendingCurve, Stream, StressRegime,
+)
 from fireplace.config import load_config
 from fireplace.simulate import simulate
 from fireplace.report import aggregate
@@ -119,6 +121,23 @@ def test_dynamic_guardrails_lift_success_and_cut_peak_wr():
     a_static, a_dyn = aggregate(static), aggregate(dyn)
     if a_static.median_peak_wr is not None and a_dyn.median_peak_wr is not None:
         assert a_dyn.median_peak_wr <= a_static.median_peak_wr + 1e-9
+
+
+def test_stress_regime_lowers_success_and_is_inert_when_off():
+    """An enabled stress window cuts wealth/success; a disabled one changes nothing,
+    and years outside the window keep their bootstrapped draws."""
+    off = simulate(_disc_case())
+    on = simulate(_disc_case(stress=StressRegime(
+        enabled=True, start_age=62, years=8, annual_inflation=0.08, annual_nominal_return=0.0,
+    )))
+    assert on.success_rate <= off.success_rate
+    assert np.median(on.wealth_real[:, -1]) < np.median(off.wealth_real[:, -1])
+    # Disabled is a perfect no-op (real data path identical).
+    inert = simulate(_disc_case(stress=StressRegime(enabled=False)))
+    assert np.allclose(off.wealth_real, inert.wealth_real)
+    # The stressed window's nominal return is exactly the override on every run.
+    yr = 62 - 60
+    assert np.allclose(on.realised_returns[:, yr], 0.0)
 
 
 def test_load_example_config_runs(tmp_path):

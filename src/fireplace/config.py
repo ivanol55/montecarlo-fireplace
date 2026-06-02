@@ -23,6 +23,7 @@ from .case import (
     Pension,
     SpendingCurve,
     Stream,
+    StressRegime,
     TaxConfig,
     WealthTaxConfig,
     WithdrawalPolicy,
@@ -176,6 +177,8 @@ def _build_case(name: str, raw: dict) -> Case:
         )
     if "dynamic_spending" in raw and isinstance(raw["dynamic_spending"], dict):
         raw["dynamic_spending"] = DynamicSpending(**raw["dynamic_spending"])
+    if "stress" in raw and isinstance(raw["stress"], dict):
+        raw["stress"] = StressRegime(**raw["stress"])
     valid = {f.name for f in fields(Case)}
     extra = set(raw) - valid
     if extra:

@@ -105,6 +105,12 @@ care) are never flexed. When both are on, their multipliers compound.
 | `spending_curve`   | SpendingCurve   | Deterministic age-based "spending smile". See [Spending curve](#spending-curve).    |
 | `dynamic_spending` | DynamicSpending | Guyton-Klinger portfolio-reactive guardrails. See [Dynamic spending](#dynamic-spending). |
 
+### Stress testing
+
+| Field    | Type         | Description                                                                                                  |
+|----------|--------------|------------------------------------------------------------------------------------------------------------|
+| `stress` | StressRegime | Deterministic "what-if" regime (e.g. stagflation) overlaid on the bootstrap for a window. Off by default. See [Stress regime](#stress-regime). |
+
 ### Monte Carlo
 
 | Field    | Type      | Description                                                                                                   |
@@ -324,6 +330,43 @@ allocation:
 If `allocation` is omitted entirely, `return_series` is used as a single-asset
 fallback. With multiple assets defined but no `weights` or `glide_path`, the
 config raises an error.
+
+### Stress regime
+
+A deterministic "what-if" regime overlaid on top of the bootstrap — a bad
+outcome the historical data **cannot** generate on its own (e.g. a 1970s-style
+stagflation decade, absent from a post-1999 sample). **Disabled by default**;
+when off, the real data is never touched.
+
+When enabled, the sampled nominal portfolio return and CPI are **overridden with
+fixed values for a window of `years` starting at `start_age`**. Every year
+outside the window keeps its real bootstrapped draw. The window is imposed on
+*every* run, so the resulting success rate is **conditional** — "if this regime
+hits at this age, would the plan survive?" — not a probability-weighted forecast.
+It is a worst-timed stress lens, not a prediction.
+
+```yaml
+stress:
+  enabled: true
+  start_age: 42        # a stagflation decade hitting right at retirement
+  years: 10
+  annual_inflation: 0.07        # 7% CPI for ten years
+  annual_nominal_return: 0.00   # 0% nominal → ~-6.5%/yr real
+```
+
+| Field                   | Type  | Description                                                                                              |
+|-------------------------|-------|---------------------------------------------------------------------------------------------------------|
+| `enabled`               | bool  | (`false`) Off = the bootstrap runs untouched.                                                            |
+| `start_age`             | int   | (`42`) Age at which the stress window begins.                                                            |
+| `years`                 | int   | (`10`) Length of the window.                                                                             |
+| `annual_inflation`      | float | (`0.07`) Nominal CPI imposed each year in the window.                                                    |
+| `annual_nominal_return` | float | (`0.0`) Nominal portfolio return imposed each year. Well below inflation = stagflation (deeply negative real). |
+
+The window overrides the portfolio-level return, so it bypasses the `allocation`
+inside the window (the whole book earns `annual_nominal_return`). Sequence risk
+makes the same shock far more damaging early (at retirement) than late — move
+`start_age` to test the timing. Combine with `pension.monthly_amount: 0` for a
+compound worst case (no pension *and* stagflation at once).
 
 ## Minimal valid example
 

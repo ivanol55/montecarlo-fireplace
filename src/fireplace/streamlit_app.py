@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from fireplace.case import Case, Stream
+from fireplace.case import Case, CurvePoint, Stream
 from fireplace.config import load_config
 from fireplace.render_html import _terminal_histogram, _wealth_fan_figure, _withdrawal_figure
 from fireplace.report import aggregate
@@ -41,6 +41,7 @@ def _editable_streams(label: str, streams: list[Stream], key_prefix: str) -> lis
                 "end_age": s.end_age,
                 "inflate": s.inflate,
                 "growth": s.growth,
+                "discretionary": s.discretionary,
             }
             for s in streams
         ]
@@ -67,6 +68,7 @@ def _editable_streams(label: str, streams: list[Stream], key_prefix: str) -> lis
                     inflate=bool(row["inflate"]),
                     growth=float(row.get("growth") or 0.0),
                     kind=kind,  # type: ignore[arg-type]
+                    discretionary=bool(row.get("discretionary", False)),
                 )
             )
         except (ValueError, TypeError):
@@ -143,6 +145,36 @@ def _edit_case(base: Case) -> Case:
             "EF target (months of expenses)", 0, 36, int(c.withdrawal.ef_target_months)
         )
 
+        st.subheader("Spending behaviour")
+        st.caption("Both act only on expense rows marked `discretionary`.")
+        sc = c.spending_curve
+        sc.enabled = st.checkbox("Spending smile (age curve)", sc.enabled)
+        if sc.enabled:
+            piv_df = pd.DataFrame(
+                [{"age": p.age, "factor": p.factor} for p in sc.pivots]
+                or [{"age": c.age, "factor": 1.0}]
+            )
+            edited_piv = st.data_editor(
+                piv_df, num_rows="dynamic", use_container_width=True, key="curve_pivots",
+                column_config={"factor": st.column_config.NumberColumn(format="%.2f")},
+            )
+            pts: list[CurvePoint] = []
+            for _, r in edited_piv.iterrows():
+                try:
+                    pts.append(CurvePoint(age=int(r["age"]), factor=float(r["factor"])))
+                except (ValueError, TypeError):
+                    continue
+            sc.pivots = pts
+        ds = c.dynamic_spending
+        ds.enabled = st.checkbox("Dynamic guardrails (Guyton-Klinger)", ds.enabled)
+        if ds.enabled:
+            ds.upper_guard = st.number_input("Cut when WR > × initial", 1.0, 3.0, ds.upper_guard, step=0.05)
+            ds.lower_guard = st.number_input("Raise when WR < × initial", 0.1, 1.0, ds.lower_guard, step=0.05)
+            ds.cut = st.number_input("Cut size (fraction)", 0.0, 0.5, ds.cut, step=0.01)
+            ds.bump = st.number_input("Raise size (fraction)", 0.0, 0.5, ds.bump, step=0.01)
+            ds.floor = st.number_input("Floor × baseline", 0.1, 1.0, ds.floor, step=0.05)
+            ds.ceiling = st.number_input("Ceiling × baseline", 1.0, 4.0, ds.ceiling, step=0.05)
+
         st.subheader("Pension")
         c.pension.monthly_amount = st.number_input(
             "Monthly amount (€)", 0.0, 1e5, float(c.pension.monthly_amount), step=50.0
@@ -150,6 +182,33 @@ def _edit_case(base: Case) -> Case:
         c.pension.start_age = st.number_input(
             "Start age", 50, 75, int(c.pension.start_age)
         )
+
+        st.subheader("Wealth tax")
+        wt = c.wealth_tax
+        wt.enabled = st.checkbox("Enable net-wealth tax (Patrimonio/ITSGF)", wt.enabled)
+        if wt.enabled:
+            wt.allowance = st.number_input(
+                "Allowance (€)", 0.0, 5e6, float(wt.allowance), step=50000.0
+            )
+            wt.index_to_inflation = st.checkbox(
+                "Index allowance & brackets to inflation", wt.index_to_inflation
+            )
+            st.caption(f"{len(wt.brackets)} bracket(s) loaded from YAML — edit there to change the scale.")
+
+        st.subheader("Stress (what-if regime)")
+        sr = c.stress
+        sr.enabled = st.checkbox("Inject a deterministic stress window", sr.enabled)
+        if sr.enabled:
+            sr.start_age = st.number_input("Stress start age", c.age, c.end_age, int(sr.start_age))
+            sr.years = st.slider("Stress length (years)", 1, 30, int(sr.years))
+            sr.annual_inflation = (
+                st.number_input("Stress inflation (%)", 0.0, 30.0, sr.annual_inflation * 100, step=0.5) / 100
+            )
+            sr.annual_nominal_return = (
+                st.number_input("Stress nominal return (%)", -30.0, 30.0, sr.annual_nominal_return * 100, step=0.5)
+                / 100
+            )
+            st.caption("Conditional, imposed on all runs. E.g. 7% / 0% = a 1970s-style stagflation decade.")
 
         st.subheader("Monte Carlo")
         c.n_runs = st.select_slider(
@@ -188,11 +247,14 @@ def main() -> None:
         rep = simulate(edited)
         agg = aggregate(rep)
 
-    cols = st.columns(4)
+    show_wtax = agg.median_lifetime_wealth_tax > 0
+    cols = st.columns(5 if show_wtax else 4)
     cols[0].metric("Success rate", f"{agg.success_rate * 100:.1f}%")
     cols[1].metric("Terminal wealth (p50)", f"{agg.terminal_wealth_p50:,.0f} {edited.currency}")
     cols[2].metric("Terminal wealth (p10)", f"{agg.terminal_wealth_p10:,.0f} {edited.currency}")
-    cols[3].metric("Median lifetime tax", f"{agg.median_lifetime_tax:,.0f} {edited.currency}")
+    cols[3].metric("Median lifetime income tax", f"{agg.median_lifetime_tax:,.0f} {edited.currency}")
+    if show_wtax:
+        cols[4].metric("Median lifetime wealth tax", f"{agg.median_lifetime_wealth_tax:,.0f} {edited.currency}")
 
     st.plotly_chart(_wealth_fan_figure(rep), use_container_width=True)
     st.plotly_chart(_withdrawal_figure(rep), use_container_width=True)

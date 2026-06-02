@@ -304,11 +304,48 @@ and *stacks it with portfolio gains realised the same year*, so a higher
 `cash_nominal_return` doesn't just mean more interest — it also pushes
 portfolio-withdrawal euros into higher brackets in the years you do both.
 
+### Pension reality for an early retiree
+
+The `pension` block is a flat inflation-indexed monthly amount, but picking a
+*realistic* figure for someone retiring well before the legal age is the hard
+part — and the naive "I'll get the minimum pension" assumption is usually wrong.
+Two Spanish rules dominate, and both bite early retirees:
+
+1. **Carencia específica.** Beyond the 15-year minimum contribution
+   (*carencia genérica*), **2 of the last 15 years before you claim** (so roughly
+   ages 52–67) must be contributed. Stop contributing at, say, 42 and you have
+   *zero* in that window → you **forfeit the contributory pension entirely**,
+   unless you keep contributing into your early 50s (freelance/autónomo work
+   lands there) or pay a *convenio especial* to stay "asimilado al alta". A
+   part-time bridge into your 50s therefore does double duty: it funds the
+   sequence-risk decade **and** keeps the pension alive.
+2. **Base reguladora = the last 25 years' contribution bases.** For an early
+   retiree those years are low or empty, and your peak-earning years fall
+   *outside* the window — so the base comes out small. The *complemento a
+   mínimos* that would top you up to the headline minimum pension is
+   **means-tested on income**, which a sizeable taxable portfolio usually exceeds
+   — so you're left with the raw (low) formula amount, not the minimum.
+
+Practical guidance: set `monthly_amount` to the realistic eligibility-maintained
+figure (often *well below* the minimum pension), and stress both the **floor**
+(`monthly_amount: 0` — the likely outcome of a pure stop-with-no-convenio) and an
+optimistic ceiling as separate scenarios. Treat the pension as a bonus, not a
+foundation. Rules shift over a multi-decade horizon — verify with a gestor.
+
+### Stress-testing regimes the data can't show
+
+Spanish (and global) return history in the bundled data starts in 1999, so the
+bootstrap **cannot** produce a 1970s-style stagflation decade. The `stress`
+block injects exactly that — a deterministic window of high inflation + poor
+nominal returns, overlaid on the bootstrap without touching the real data
+elsewhere. Use it to ask "if a lost decade hits right at retirement, do I
+survive?" See [stress regime in CONFIG.md](docs/CONFIG.md#stress-regime).
+
 ## Modelling notes
 
 - **Returns**: bootstrapped from `data/returns_annual.csv` — two columns,
   MSCI World Net TR EUR (unhedged) and Bloomberg Global Aggregate EUR-hedged,
-  both 1999–2024. Those are the EUR-investor versions of what an Indexa
+  both 1999–2025. Those are the EUR-investor versions of what an Indexa
   Capital / IWDA / AGGH holder actually realises (FX exposure for stocks,
   EUR-hedged for bonds). Use `block_bootstrap` with `block_size: 5` to
   preserve some autocorrelation. See [data/SOURCES.md](data/SOURCES.md) for
@@ -368,7 +405,7 @@ on the same-year realised gains is handled by the existing
 `year_savings_income` ledger.
 
 **Sensitivity to `ef_target_months` under the regenerating policy** —
-success-rate sweep across the personal use case (5000 runs, 1999–2024 EUR
+success-rate sweep across the personal use case (5000 runs, 1999–2025 EUR
 bootstrap):
 
 | Scenario                     | 3mo  | 6mo  | 12mo | 18mo | 24mo |
@@ -412,7 +449,9 @@ math in the Appendix.
 - Wealth tax (Impuesto sobre el Patrimonio / ITSGF) is modelled but **off by
   default** and highly region-dependent — you supply the regional scale (see the
   wealth-tax note below). No IRPF on labour income; income streams are entered net.
-- Pension is a fixed inflation-indexed monthly amount (no SS replacement-rate model)
+- Pension is a fixed inflation-indexed monthly amount (no SS replacement-rate
+  model). Sizing it realistically for an early retiree is subtle — see
+  [Pension reality for an early retiree](#pension-reality-for-an-early-retiree).
 - Real-estate, mortgage interest, and one-off expenses must be modelled as
   custom expense streams
 
@@ -441,11 +480,18 @@ will always be paired with that year's bond and CPI numbers.
 
 When you specify multiple columns whose history starts in different years,
 the sampler drops rows where any needed column is missing and bootstraps
-from the intersection. The bundled CSV's three columns all start in 1999
-(see [data/SOURCES.md](data/SOURCES.md) for why), so the effective pool is
-26 rows. With `block_size: 5` that's about 5 effective independent blocks
-per simulated path — enough for ranking scenarios, but read tail percentiles
-with appropriate skepticism.
+from the intersection. In the bundled CSV, MSCI World and the bond index start
+in 1999 while eurozone HICP starts in 1997 (the 1997–98 rows are HICP-only; see
+[data/SOURCES.md](data/SOURCES.md) for why), so the multi-asset intersection is
+1999–2025 — an effective pool of **27 rows**. With `block_size: 5` that's about
+5 effective independent blocks per simulated path — enough for ranking
+scenarios, but read tail percentiles with appropriate skepticism.
+
+To probe regimes the pool *cannot* contain (e.g. 1970s stagflation), use the
+`stress` block — a deterministic high-inflation / low-return override for a
+window of years, laid over the bootstrap (see
+[Stress regime](docs/CONFIG.md#stress-regime)). It's the explicit answer to "my
+data is too benign": inject the bad regime by hand and see if the plan holds.
 
 ### 2. Multi-asset weighted return ([`simulate.py`](src/fireplace/simulate.py))
 
